@@ -1,5 +1,5 @@
 train: 
-val: ../../../../media/shared_ssd/eval_data/eval/images
+val: ../../eval_data/eval/images
 test: 
 
 nc: 3
