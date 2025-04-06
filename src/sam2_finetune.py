@@ -17,7 +17,7 @@ CURR_DIR = os.getcwd()
 WORKSPACE_DIR = os.path.dirname(CURR_DIR)
 DATASETS_DIR = WORKSPACE_DIR + '/../sam2_labeled_data/'
 SSD_DIR = WORKSPACE_DIR + '/../'
-DATA_YAML = SSD_DIR + '/same_labeled_data/data.yaml'
+DATA_YAML = SSD_DIR + '/datasets/data.yaml'
 
 # these will be created by format_datasets
 # and used for training
@@ -475,3 +475,6 @@ def main():
         model.save(model_path)
         # Export the model as an .onnx file
         model.export(format='onnx', batch=ONNX_BATCH_SIZE)
+
+if __name__ == "__main__":
+    main()
