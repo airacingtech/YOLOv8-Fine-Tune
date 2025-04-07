@@ -110,7 +110,7 @@ Where the number represents the object id of the sam2 label.
 
 2. Ensure the `data.yaml` contains the correct paths. all paths should be from the `src/` directory to the location of the desired `data/` directory (see below)
 
-3. Run the script while inside the `src/` directory. `sam2_finetune.py` has the following cli arguments:
+3. Run the script while inside the `src/` directory. The script requires the packages in the conda env. `sam2_finetune.py` has the following cli arguments:
 
 | Argument            | Type    | Required | Description                                                                 |
 |---------------------|---------|----------|-----------------------------------------------------------------------------|

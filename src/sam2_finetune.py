@@ -24,7 +24,7 @@ WORKSPACE_DIR = os.path.dirname(CURR_DIR)
 # Change these parameters to fit your needs
 EPOCHS = 100
 NUM_TRAIN_LOOPS = 1
-IMG_SIZE = 1032 # YOLOv8 default is 640
+IMG_SIZE = 1056 # YOLOv8 default is 640
 LAYER_FREEZE = 0 # Number of layers to freeze
 
 # Amount to use different data augmentations
