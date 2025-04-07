@@ -108,14 +108,29 @@ Masks are expected to be 2D-segmasks that match the dimensions of the correspond
 ```
 Where the number represents the object id of the sam2 label.
 
-2. Ensure the `data.yaml` contains the correct paths. all paths should be from the `src/` directory to the location of the desired `data/` directory (see below)
+2. Ensure the `data.yaml` contains the correct paths. all paths should be from the `src/` directory to the location of the desired `data/` directory. 
 
-3. Run the script while inside the `src/` directory. The script requires the packages in the conda env. `sam2_finetune.py` has the following cli arguments:
+The `data.yaml` file should look like something this (make sure to alter paths to where the actual train, val, test folders are):
+```yaml
+train: ../../data/train/images
+val: ../../data/valid/images
+test: ../../data/test/images
+
+nc: 3
+
+names:
+  0: person
+  1: bicycle
+  2: car
+...
+```
+
+3. Run the `sam2_finetune.py` script while inside the `src/` directory. The script requires the packages in the conda env. `sam2_finetune.py` has the following cli arguments:
 
 | Argument            | Type    | Required | Description                                                                 |
 |---------------------|---------|----------|-----------------------------------------------------------------------------|
-| `dataset_dir`       | `str`   | ✅ Yes   | Path to the root directory of the SAM2 dataset (sam2_labeled_data in the schematic above)                  |
-| `data_yaml`         | `str`   | ✅ Yes   | Path to the `data.yaml` file that defines dataset structure and classes.   |
+| `dataset_dir`       | `str`   | ✅ Yes   | Path to the root directory of the SAM2 dataset (the `sam2_labeled_data` folder in the schematic above)                  |
+| `data_yaml`         | `str`   | ✅ Yes   | Path to the (manually created) `data.yaml` file that defines dataset structure and classes.   |
 | `data_dest_dir`     | `str`   | ✅ Yes   | Path to the destination directory where the formatted dataset `data/` will be saved. |
 | `--resume`          | `flag`  | ❌ No    | If provided, training will resume from the checkpoint defined by `--resume_path`. |
 | `--resume_path`     | `str`   | ❌ No    | Path to the YOLOv8 checkpoint to resume training from. Only used if `--resume` is set. |
