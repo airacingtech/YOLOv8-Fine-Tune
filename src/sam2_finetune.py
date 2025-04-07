@@ -9,21 +9,14 @@ import torch
 import random
 import shutil
 import tqdm
+import argparse
 
 
 # ========== DIRECTORIES ========== #
 
 CURR_DIR = os.getcwd()
+# this should just be the path to the yolo-finetune repo
 WORKSPACE_DIR = os.path.dirname(CURR_DIR)
-DATASETS_DIR = WORKSPACE_DIR + '/../sam2_labeled_data/'
-SSD_DIR = WORKSPACE_DIR + '/../'
-DATA_YAML = SSD_DIR + '/datasets/data.yaml'
-
-# these will be created by format_datasets
-# and used for training
-data_dir = SSD_DIR + 'data/'
-curr_data_yaml = data_dir + 'data.yaml'
-TEST_PATH = data_dir + '/test/images/'
 
 
 # ==========YOLO PARAMS ========== #
@@ -76,11 +69,11 @@ KEEP_EMPTY_FRAMES = True
 PERCENTAGE_EMPTY_FRAMES_TO_KEEP = 0.8
 
 # Flag to resume training from a previous checkpoint (false if training from scratch)
-RESUME_TRAINING = False
-RESUME_TRAINING_PATH = None
+# RESUME_TRAINING = False
+# RESUME_TRAINING_PATH = None
 
 # Size of YOLOv8 model
-MODEL_SIZE = 'n' # 'n' ,'s', 'm', 'l', 'x'
+# MODEL_SIZE = 'n' # 'n' ,'s', 'm', 'l', 'x'
 
 # Path to trained model weights
 MODELS_PATH = WORKSPACE_DIR + '/models/'
@@ -234,7 +227,7 @@ def normalize_image(img_path : os.PathLike) -> None:
     img = cv2.resize(img, (640, 640))
     cv2.imwrite(img_path, img)
 
-def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike) -> None:
+def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_dest_dir : os.PathLike) -> None:
     """
     Takes in a directory of datasets where each dataset is in the format of a COCO dataset
     and then formats the datasets into a single dataset that YOLOv8 can use for training
@@ -277,19 +270,19 @@ def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike) -> Non
 
 
     # Create the directories for the training, validation, and test data
-    if os.path.exists(SSD_DIR + "data/"):
+    if os.path.exists(data_dest_dir + "data/"):
         print("Deleting and recreating 'data/' folder...")
-        shutil.rmtree("data/")
-    os.mkdir(SSD_DIR + "data/")
-    os.mkdir(SSD_DIR + "data/train/")
-    os.mkdir(SSD_DIR + "data/train/images/")
-    os.mkdir(SSD_DIR + "data/train/labels/")
-    os.mkdir(SSD_DIR + "data/valid/")
-    os.mkdir(SSD_DIR + "data/valid/images/")
-    os.mkdir(SSD_DIR + "data/valid/labels/")
-    os.mkdir(SSD_DIR + "data/test/")
-    os.mkdir(SSD_DIR + "data/test/images/")
-    os.mkdir(SSD_DIR + "data/test/labels/")
+        shutil.rmtree(data_dest_dir + "data/")
+    os.mkdir(data_dest_dir + "data/")
+    os.mkdir(data_dest_dir + "data/train/")
+    os.mkdir(data_dest_dir + "data/train/images/")
+    os.mkdir(data_dest_dir + "data/train/labels/")
+    os.mkdir(data_dest_dir + "data/valid/")
+    os.mkdir(data_dest_dir + "data/valid/images/")
+    os.mkdir(data_dest_dir + "data/valid/labels/")
+    os.mkdir(data_dest_dir + "data/test/")
+    os.mkdir(data_dest_dir + "data/test/images/")
+    os.mkdir(data_dest_dir + "data/test/labels/")
 
     # Copy over images and labels to new directories
     print("Copying images and labels to new directories...")
@@ -307,30 +300,30 @@ def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike) -> Non
         if (random.random() < TRAIN_PERCENTAGE):
             new_image_name = img_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".jpg"
             new_label_name = label_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".txt"
-            img_dst = os.path.join(SSD_DIR + "data/train/images/", dataset_path + "_" + new_image_name)
-            label_dst = os.path.join(SSD_DIR + "data/train/labels/", dataset_path + "_" + new_label_name)
+            img_dst = os.path.join(data_dest_dir + "data/train/images/", dataset_path + "_" + new_image_name)
+            label_dst = os.path.join(data_dest_dir + "data/train/labels/", dataset_path + "_" + new_label_name)
             copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
             new_image_uuid += 1
             train_frames += 1
     for img_src, label_src, dataset_path in tqdm.tqdm(valid_data):
         new_image_name = img_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".jpg"
         new_label_name = label_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".txt"
-        img_dst = os.path.join(SSD_DIR + "data/valid/images/", dataset_path + "_" + new_image_name)
-        label_dst = os.path.join(SSD_DIR + "data/valid/labels/", dataset_path + "_" + new_label_name)
+        img_dst = os.path.join(data_dest_dir + "data/valid/images/", dataset_path + "_" + new_image_name)
+        label_dst = os.path.join(data_dest_dir + "data/valid/labels/", dataset_path + "_" + new_label_name)
         copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
         new_image_uuid += 1
         valid_frames += 1
     for img_src, label_src, dataset_path in tqdm.tqdm(test_data):
         new_image_name = img_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".jpg"
         new_label_name = label_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".txt"
-        img_dst = os.path.join(SSD_DIR + "data/test/images/", dataset_path + "_" + new_image_name)
-        label_dst = os.path.join(SSD_DIR + "data/test/labels/", dataset_path + "_" + new_label_name)
+        img_dst = os.path.join(data_dest_dir + "data/test/images/", dataset_path + "_" + new_image_name)
+        label_dst = os.path.join(data_dest_dir + "data/test/labels/", dataset_path + "_" + new_label_name)
         copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
         new_image_uuid += 1
         test_frames += 1
 
     # Copy over data.yaml file from root directory
-    shutil.copy(data_yaml, SSD_DIR + "data/")
+    shutil.copy(data_yaml, data_dest_dir + "data/")
     print("Copied over 'data.yaml' file")
     print("Number of empty frames kept: ", empty_frames_kept)
 
@@ -342,7 +335,7 @@ def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike) -> Non
     print("Finished creating directories for YOLOv8 training pipeline")
 
 # ========== TRAINING YOLOv8 ========== #
-def choose_model_size() -> str:
+def choose_model_size(model_size) -> str:
     """
     Takes the global variable MODEL_SIZE and returns the corresponding string
     to pass to the YOLO class and print the model parameter size.
@@ -350,27 +343,27 @@ def choose_model_size() -> str:
     Returns:
         str: The model string to pass to the YOLO class.
     """
-    if MODEL_SIZE == 'n':
+    if model_size == 'n':
         print("Using YOLOv8 Nano model")
         return 'yolov8n-seg.pt'
-    elif MODEL_SIZE == 's':
+    elif model_size == 's':
         print("Using YOLOv8 Small model")
         return 'yolov8s-seg.pt'
-    elif MODEL_SIZE == 'm':
+    elif model_size == 'm':
         print("Using YOLOv8 Medium model")
         return 'yolov8m-seg.pt'
-    elif MODEL_SIZE == 'l':
+    elif model_size == 'l':
         print("Using YOLOv8 Large model")
         return 'yolov8l-seg.pt'
-    elif MODEL_SIZE == 'x':
+    elif model_size == 'x':
         print("Using YOLOv8 Extra Large model")
         return 'yolov8x-seg.pt'
 
-def train_model(model : YOLO) -> None:
+def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     start_time = time.time()
-    model_name = f'yolov8{MODEL_SIZE}-img_size_{IMG_SIZE}_layers_frozen_{LAYER_FREEZE}_{DATE}'
+    model_name = f'yolov8{model_size}-img_size_{IMG_SIZE}_layers_frozen_{LAYER_FREEZE}_{DATE}'
     # By default, the model trains on a single GPU
     model.train(
         data=curr_data_yaml,
@@ -412,7 +405,7 @@ def tune_model(model : YOLO) -> None:
         print("Skipping hyperparameter tuning")
 
 
-def test_model(model : YOLO, test_results_path: os.PathLike) -> None:
+def test_model(model : YOLO, test_results_path: os.PathLike, test_images_path: os.PathLike) -> None:
     """
     Test the fine-tuned model on test images and save the results.
 
@@ -429,8 +422,8 @@ def test_model(model : YOLO, test_results_path: os.PathLike) -> None:
         os.makedirs(test_results_path)
 
     # Inferencee fine-tuned model on test images and save results
-    for file in os.listdir(TEST_PATH):
-        file_path = os.path.join(TEST_PATH, file)
+    for file in os.listdir(test_images_path):
+        file_path = os.path.join(test_images_path, file)
         output = model.predict(file_path)
         save_path = os.path.join(test_results_path, file)
         cv2.imwrite(save_path, output[0].plot())
@@ -441,11 +434,39 @@ def test_model(model : YOLO, test_results_path: os.PathLike) -> None:
 
 # ========== MAIN FUNCTION ========== #
 def main():
+    # arg parse
+        # arg parsing
+    parser = argparse.ArgumentParser(description="Fine-tune YOLOv8 model on SAM2 dataset.")
+    parser.add_argument("dataset_dir", type=str, help="Path to SAM2 dataset directory")
+    parser.add_argument("data_yaml", type=str, help="Path to data.yaml file")
+    parser.add_argument("data_dest_dir", type=str, help="Path to destination directory for formatted dataset")
+    parser.add_argument("--resume", action="store_true", help="Resume training from checkpoint")
+    parser.add_argument("--resume_path", type=str, default=None, help="Path to checkpoint to resume training from")
+    parser.add_argument("--model_size", type=str, default='n', help="Size of YOLOv8 model to use")
+
+    args = parser.parse_args()
+
+    DATASETS_DIR = args.dataset_dir
+    DATA_YAML = args.data_yaml
+    DATA_DEST_DIR = args.data_dest_dir
+
+    data_dir = DATA_DEST_DIR + 'data/'
+    curr_data_yaml = data_dir + 'data.yaml'
+    TEST_PATH = data_dir + '/test/images/'
+
+    RESUME_TRAINING = args.resume
+    RESUME_TRAINING_PATH = args.resume_path
+    MODEL_SIZE = args.model_size
+
+
+
+
+
     # convert sam2 masks to labels
     format_sam2_labels(DATASETS_DIR)
 
     # format dataset for yolov8
-    format_datasets(DATASETS_DIR, DATA_YAML)
+    format_datasets(DATASETS_DIR, DATA_YAML, DATA_DEST_DIR)
 
     # check system info - could just comment these out
     print("CUDA Available: " + str(torch.cuda.is_available()))
@@ -457,18 +478,18 @@ def main():
         model = YOLO(RESUME_TRAINING_PATH)
     # Load yolov8 nano segmentation model
     else:
-        model = YOLO(choose_model_size())
+        model = YOLO(choose_model_size(MODEL_SIZE))
 
 
     # Training loop
     epochs_done = 0
     for _ in range(NUM_TRAIN_LOOPS):
         print(f"Starting training loop starting on epoch {epochs_done}")
-        train_model(model)
+        train_model(model, curr_data_yaml, MODEL_SIZE)
         epochs_done += EPOCHS
         tune_model(model)
         test_results_path = data_dir + '/test/annotation_results' + f'_{epochs_done}epochs'
-        test_model(model, test_results_path)
+        test_model(model, test_results_path, TEST_PATH)
         # can change naming convention if need be
         model_name = f"yolov8{MODEL_SIZE}_{DATE}_batch{ONNX_BATCH_SIZE}_{EPOCHS}epochs"
         model_path = MODELS_PATH + model_name + '.pt'
