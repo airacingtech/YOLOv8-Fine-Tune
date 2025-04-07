@@ -475,6 +475,9 @@ def main():
 
     # Load yolov8 nano segmentation model
     if RESUME_TRAINING:
+        if RESUME_TRAINING_PATH is None:
+            print("Please provide a path to the checkpoint to resume training from.")
+            return
         model = YOLO(RESUME_TRAINING_PATH)
     # Load yolov8 nano segmentation model
     else:

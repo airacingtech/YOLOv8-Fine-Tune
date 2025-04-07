@@ -35,12 +35,16 @@ where each line repsents a different segmentation instance. The first number in 
 
 The `data.yaml` file should look like this:
 ```yaml
-train: ../train/images
-val: ../valid/images
-test: ../test/images
+train: ../../data/train/images
+val: ../../data/valid/images
+test: ../../data/test/images
 
-nc: 2
-names: ['drivable-area', 'opponent-car'] # class names
+nc: 3
+
+names:
+  0: person
+  1: bicycle
+  2: car
 ...
 ```
 
@@ -51,3 +55,84 @@ In the first cell of `/src/fine_tune.py` change the parameters to fit your needs
 2. Perform a hyperparameter sweep / tune on the model.
 3. Evaluate the model on the test set and save the results to a directory.
 4. Export the model to the `models/` directory in the `ONNX` format.
+
+
+## SAM2 FineTuning:
+`sam2_finetune.py` contains an end-to-end script for finetuning a model from sam2 labeled images. It is heavily based on `fine_tune.ipynb` and `sam2_format.ipynb`. Data is copied below for clarity.
+
+This script performs the following:
+1. Converts the SAM2 segmasks into a YOLO-compatible labels
+```bash
+0 0 0.9973958333333334 0.18992248062015504 0.9921875 0.998062015503876 ...
+1 0.3333333333333333 0.5234375 0.39728682170542634 0.5234375 0.4050387596899225 ...
+0 0 0.9947916666666666 0.998062015503876 0.9921875 0.9961240310077519 0.8932291666666666 ...
+1 0.33527131782945735 0.5234375 0.39728682170542634 0.5234375 0.40310077519379844 ...
+```
+2. Creates new YOLO-compatible dataset
+```bash
+data/
+    ├── test/
+    │   ├── images/
+    │   └── labels/
+    ├── train/
+    │   ├── images/
+    │   └── labels/
+    ├── val/
+    │   ├── images/
+    │   └── labels/
+    data.yaml
+```
+3. Finetunes YOLO model
+4. Exports YOLO model as onnx
+
+### Running SAM2 Finetuning
+1. Create a directory that holds SAM2-labeled ROSbags of images and masks:
+```bash
+sam2_labeled_data/
+    ├── bag1/
+    │   ├── images/
+    │   └── masks/
+    ├── bag2/
+    │   ├── images/
+    │   └── masks/
+    ├── bag3/
+    │   ├── images/
+    │   └── masks/
+```
+Masks are expected to be 2D-segmasks that match the dimensions of the corresponding image. They should be `.json` files in the form:
+```json
+{"1": [[0, 0, ..., 0],
+       [0, 0, ..., 0],
+              ...
+       [1, 1, ..., 0]]}
+```
+Where the number represents the object id of the sam2 label.
+
+2. Ensure the `data.yaml` contains the correct paths. all paths should be from the `src/` directory to the location of the desired `data/` directory (see below)
+
+3. Run the script while inside the `src/` directory. `sam2_finetune.py` has the following cli arguments:
+
+| Argument            | Type    | Required | Description                                                                 |
+|---------------------|---------|----------|-----------------------------------------------------------------------------|
+| `dataset_dir`       | `str`   | ✅ Yes   | Path to the root directory of the SAM2 dataset (sam2_labeled_data in the schematic above)                  |
+| `data_yaml`         | `str`   | ✅ Yes   | Path to the `data.yaml` file that defines dataset structure and classes.   |
+| `data_dest_dir`     | `str`   | ✅ Yes   | Path to the destination directory where the formatted dataset `data/` will be saved. |
+| `--resume`          | `flag`  | ❌ No    | If provided, training will resume from the checkpoint defined by `--resume_path`. |
+| `--resume_path`     | `str`   | ❌ No    | Path to the YOLOv8 checkpoint to resume training from. Only used if `--resume` is set. |
+| `--model_size`      | `str`   | ❌ No    | Defines the size variant of the YOLOv8 model to use. Options: `'n'`, `'s'`, `'m'`, `'l'`, `'x'`. Default is `'n'`. |
+
+Example usage:
+```bash
+python3 sam2_finetune.py ../../sam2_labeled_data/ ../data.yaml ../../
+```
+
+Specifying model size:
+```bash
+python3 sam2_finetune.py ../../sam2_labeled_data/ ../data.yaml ../../ --model_size x
+```
+
+
+For resuming training:
+```bash
+python3 sam2_finetune.py ../../sam2_labeled_data/ ../data.yaml ../../ --resume --resume_path runs/segment/yolov8n-img_size_1032_layers_frozen_0_2025-04-07-01-33-24/weights/best.pt
+```
