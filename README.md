@@ -57,7 +57,7 @@ Masks are expected to be 2D-segmasks that match the dimensions of the correspond
               ...
        [1, 1, ..., 0]]}
 ```
-Where the number represents the object id of the sam2 label.
+Where the number represents the object id of the sam2 label - this is SEPARATE from the object label of `2` to represent car, object id represents the number of objects within that image.
 
 2. Ensure the `data.yaml` contains the correct paths. all paths should be from the `src/` directory to the location of the desired `data/` directory. 
 
