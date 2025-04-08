@@ -12,12 +12,12 @@ conda env create -f environment.yml
 `sam2_finetune.py` contains an end-to-end script for finetuning a model from sam2 labeled images. It is heavily based on `fine_tune.ipynb` and `sam2_format.ipynb`. Data is copied below for clarity.
 
 This script performs the following:
-1. Converts the SAM2 segmasks into a YOLO-compatible labels
+1. Converts the SAM2 segmasks into a YOLO-compatible labels, where the first integer is the COCO-dataset index for "car", and the following floats are normalized (x,y) coordinate pairs outlining the contour of the mask. 
 ```bash
-0 0 0.9973958333333334 0.18992248062015504 0.9921875 0.998062015503876 ...
-1 0.3333333333333333 0.5234375 0.39728682170542634 0.5234375 0.4050387596899225 ...
-0 0 0.9947916666666666 0.998062015503876 0.9921875 0.9961240310077519 0.8932291666666666 ...
-1 0.33527131782945735 0.5234375 0.39728682170542634 0.5234375 0.40310077519379844 ...
+2 0.9973958333333334 0.18992248062015504 0.9921875 0.998062015503876 ...
+2.3333333333333333 0.5234375 0.39728682170542634 0.5234375 0.4050387596899225 ...
+2 0.9947916666666666 0.998062015503876 0.9921875 0.9961240310077519 0.8932291666666666 ...
+2 0.33527131782945735 0.5234375 0.39728682170542634 0.5234375 0.40310077519379844 ...
 ```
 2. Creates new YOLO-compatible dataset
 ```bash
@@ -34,7 +34,7 @@ data/
     data.yaml
 ```
 3. Finetunes YOLO model
-4. Exports YOLO model as onnx
+4. Exports YOLO model as .onnx with a batch size of `1` and an img size of `1056` (or another image size, depending on the finetuned model size)
    
 ### Running SAM2 Finetuning
 1. Create a directory that holds SAM2-labeled ROSbags of images and masks:
