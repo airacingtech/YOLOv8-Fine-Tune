@@ -81,7 +81,8 @@ MODELS_PATH = WORKSPACE_DIR + '/models/'
 # This line prevents the Kernel from crashing when running model.train() which calls a plotting function
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
-ONNX_BATCH_SIZE = 4
+# This is the Tensorrt batch size 
+ONNX_BATCH_SIZE = 1
 
 # Todays data + Batch size + epochs
 DATE = time.strftime('%Y-%m-%d-%H-%M-%S')
@@ -108,41 +109,56 @@ def mask_to_polygon(mask):
         ret_contours.append(contour)
     return ret_contours
 
-# function that matches label name to corresponding img name
-def format_sam2_label_name(label_name):
-    # img name = 5 digit number, then .jpg
-    # current label name = img number_1.json
-    img_number = label_name.split('.')[0]
-    # need to make sure img number is 6 digits
-    img_number = img_number.zfill(6)
-    return 'frame_' + img_number + '.txt'
+# to ensure the labels have the same format as the images, we map the jsons to the images
+def create_json_to_img_mapping(images_dir):
+    mapping = {}
+    for img_name in os.listdir(images_dir):
+        if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+            name_wo_ext = os.path.splitext(img_name)[0]
+            if name_wo_ext.startswith('frame_'):
+                # frame_000007.PNG → 7.json
+                frame_num = str(int(name_wo_ext.split('_')[1]))
+                mapping[frame_num + '.json'] = img_name
+            else:
+                # 00005.jpg → 00005.json
+                frame_num = str(int(name_wo_ext.split('.')[0]))
+                mapping[frame_num + '.json'] = img_name
+    return mapping
 
-
-# given a directory of masks, create a director of labels as polygons
-# only does this for one directory, need to specify path to bag
-def format_sam2_labels_dir(dataset_dir, dest_dir):
+# Creates directory of labels from the masks, retaining naming format of the images
+def format_sam2_labels_dir(images_dir, masks_dir, dest_dir):
     if not os.path.exists(dest_dir):
         os.makedirs(dest_dir)
-    sorted_filenames = sorted(os.listdir(dataset_dir))
-    for filename in sorted_filenames:
-        if filename.endswith('.json'):
-            with open(dataset_dir + '/' + filename, "r") as file:
-                data = json.load(file)
-            dest_label_name = format_sam2_label_name(filename)
-            dest_filename = dest_dir + '/' + dest_label_name
-            with open(dest_filename, "w") as file:
-                string_to_write = ""
-                for key in data.keys():
-                    mask_array = np.array(data[key], dtype=np.uint8)
-                    polygons = mask_to_polygon(mask_array)
-                    for polygon in polygons:
-                        if len(polygon) < 3:
-                            continue
-                        string_to_write += "2"
-                        for point in polygon:
-                            string_to_write += f" {point[0]} {point[1]}"
-                        string_to_write += "\n"
-                file.write(string_to_write)
+    # creates mapping so we can just iterate over the masks
+    json_to_img = create_json_to_img_mapping(images_dir)
+
+    for filename in sorted(os.listdir(masks_dir)):
+        if not filename.endswith('.json'):
+            continue
+        if filename not in json_to_img:
+            print(f"Warning: No matching image for mask {filename}")
+            continue
+
+        image_name = json_to_img[filename]
+        label_filename = os.path.splitext(image_name)[0] + '.txt'
+        dest_filepath = os.path.join(dest_dir, label_filename)
+
+        with open(os.path.join(masks_dir, filename), "r") as file:
+            data = json.load(file)
+
+        with open(dest_filepath, "w") as file:
+            string_to_write = ""
+            for key in data.keys():
+                mask_array = np.array(data[key], dtype=np.uint8)
+                polygons = mask_to_polygon(mask_array)
+                for polygon in polygons:
+                    if len(polygon) < 3:
+                        continue
+                    string_to_write += "2"
+                    for point in polygon:
+                        string_to_write += f" {point[0]} {point[1]}"
+                    string_to_write += "\n"
+            file.write(string_to_write)
 
 # given a directory of bags, create labels from the masks
 def format_sam2_labels(datasets_dir):
@@ -155,8 +171,9 @@ def format_sam2_labels(datasets_dir):
         if os.path.isdir(bag_dir):
             print(f"Processing bag: {bag}")
             dataset_dir = os.path.join(bag_dir, 'masks')
+            images_dir = os.path.join(bag_dir, 'images')
             dest_dir = os.path.join(bag_dir, 'labels')
-            format_sam2_labels_dir(dataset_dir, dest_dir)
+            format_sam2_labels_dir(images_dir, dataset_dir, dest_dir)
         else:
             print(f"Skipping {bag} as it is not a directory")
 
@@ -390,7 +407,9 @@ def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
         mixup=MIXUP,
         copy_paste=COPY_PASTE,
         erasing=ERASING,
-        crop_fraction=CROP_FRACTION
+        crop_fraction=CROP_FRACTION,
+        workers=4,
+        batch=8
     )
                 
     end_time = time.time()
@@ -443,6 +462,7 @@ def main():
     parser.add_argument("--resume", action="store_true", help="Resume training from checkpoint")
     parser.add_argument("--resume_path", type=str, default=None, help="Path to checkpoint to resume training from")
     parser.add_argument("--model_size", type=str, default='n', help="Size of YOLOv8 model to use")
+    parser.add_argument("--format_only", action="store_true", default=False, help="Only format the dataset without training")
 
     args = parser.parse_args()
 
@@ -457,6 +477,7 @@ def main():
     RESUME_TRAINING = args.resume
     RESUME_TRAINING_PATH = args.resume_path
     MODEL_SIZE = args.model_size
+    FORMAT_ONLY = args.format_only
 
 
 
@@ -467,7 +488,9 @@ def main():
 
     # format dataset for yolov8
     format_datasets(DATASETS_DIR, DATA_YAML, DATA_DEST_DIR)
-
+    if FORMAT_ONLY:
+        print("Dataset formatted. Exiting...")
+        return
     # check system info - could just comment these out
     print("CUDA Available: " + str(torch.cuda.is_available()))
     print("Torch CUDA Version: " + str(torch.version.cuda))
