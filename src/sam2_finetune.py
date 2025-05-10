@@ -81,7 +81,8 @@ MODELS_PATH = WORKSPACE_DIR + '/models/'
 # This line prevents the Kernel from crashing when running model.train() which calls a plotting function
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
-ONNX_BATCH_SIZE = 4
+# This is the Tensorrt batch size 
+ONNX_BATCH_SIZE = 1
 
 # Todays data + Batch size + epochs
 DATE = time.strftime('%Y-%m-%d-%H-%M-%S')
@@ -120,7 +121,8 @@ def create_json_to_img_mapping(images_dir):
                 mapping[frame_num + '.json'] = img_name
             else:
                 # 00005.jpg → 00005.json
-                mapping[name_wo_ext + '.json'] = img_name
+                frame_num = str(int(name_wo_ext.split('.')[0]))
+                mapping[frame_num + '.json'] = img_name
     return mapping
 
 # Creates directory of labels from the masks, retaining naming format of the images
@@ -405,7 +407,9 @@ def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
         mixup=MIXUP,
         copy_paste=COPY_PASTE,
         erasing=ERASING,
-        crop_fraction=CROP_FRACTION
+        crop_fraction=CROP_FRACTION,
+        workers=4,
+        batch=8
     )
                 
     end_time = time.time()
@@ -458,6 +462,7 @@ def main():
     parser.add_argument("--resume", action="store_true", help="Resume training from checkpoint")
     parser.add_argument("--resume_path", type=str, default=None, help="Path to checkpoint to resume training from")
     parser.add_argument("--model_size", type=str, default='n', help="Size of YOLOv8 model to use")
+    parser.add_argument("--format_only", action="store_true", default=False, help="Only format the dataset without training")
 
     args = parser.parse_args()
 
@@ -472,6 +477,7 @@ def main():
     RESUME_TRAINING = args.resume
     RESUME_TRAINING_PATH = args.resume_path
     MODEL_SIZE = args.model_size
+    FORMAT_ONLY = args.format_only
 
 
 
@@ -482,7 +488,9 @@ def main():
 
     # format dataset for yolov8
     format_datasets(DATASETS_DIR, DATA_YAML, DATA_DEST_DIR)
-
+    if FORMAT_ONLY:
+        print("Dataset formatted. Exiting...")
+        return
     # check system info - could just comment these out
     print("CUDA Available: " + str(torch.cuda.is_available()))
     print("Torch CUDA Version: " + str(torch.version.cuda))
