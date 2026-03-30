@@ -120,7 +120,7 @@ def create_json_to_img_mapping(images_dir):
                 mapping[frame_num + '.json'] = img_name
             else:
                 # 00005.jpg → 00005.json
-                frame_num = name_wo_ext
+                frame_num = str(int(name_wo_ext.split('.')[0]))
                 mapping[frame_num + '.json'] = img_name
     return mapping
 
@@ -222,6 +222,18 @@ def copy_data_yaml(label_src : os.PathLike, img_src : os.PathLike, label_dst : o
                     shutil.copy(img_src, img_dst_with_weight)
                     generate_empty_label(label_dst_with_weight)
     else:
+        # CHANGED: Read and modify the original label file in place first
+        with open(label_src, 'r') as f_in:
+            lines = f_in.readlines()
+        
+        with open(label_src, 'w') as f_out_orig:
+            for line in lines:
+                if line.startswith('2 '):
+                    f_out_orig.write('0' + line[1:])
+                else:
+                    f_out_orig.write(line)
+
+        # Now proceed with copying the updated original file to the destinations
         for i in range(choose_dataset_weight(img_src, DATASET_WEIGHTS, weighted_frames, frames_removed)):
             img_dst_with_weight = img_dst[:-4] + "_" + str(i) + ".jpg"
             label_dst_with_weight = label_dst[:-4] + "_" + str(i) + ".txt"
