@@ -228,15 +228,6 @@ def copy_data_yaml(label_src : os.PathLike, img_src : os.PathLike, label_dst : o
             shutil.copy(img_src, img_dst_with_weight)
             shutil.copy(label_src, label_dst_with_weight)
 
-def normalize_image(img_path : os.PathLike) -> None:
-    '''
-    Normalizes the image to the correct format for YOLOv8.
-    '''
-    img = cv2.imread(img_path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (640, 640))
-    cv2.imwrite(img_path, img)
-
 def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_dest_dir : os.PathLike) -> None:
     """
     Takes in a directory of datasets where each dataset is in the format of a COCO dataset
@@ -438,6 +429,7 @@ def main():
     
     parser.add_argument("--model_size", type=str, default='m', choices=['n', 's', 'm', 'l', 'x'], help="Size of YOLOv8 model to use") # CHANGED: DEFAULT CHANGED TO 'm' AND ADDED CHOICES
     parser.add_argument("--format_only", action="store_true", default=False, help="Only format the dataset without training")
+    parser.add_argument("--finetune_only", action="store_true", default=False, help="Only run the fine-tuning without performing sam2 data conversion")
 
     args = parser.parse_args()
 
@@ -453,9 +445,10 @@ def main():
     RESUME_TRAINING_PATH = args.resume_path
     MODEL_SIZE = args.model_size
     FORMAT_ONLY = args.format_only
-
-    # convert sam2 masks to labels
-    format_sam2_labels(DATASETS_DIR)
+    FINETUNE_ONLY = args.finetune_only
+    if not FINETUNE_ONLY:
+        # convert sam2 masks to labels
+        format_sam2_labels(DATASETS_DIR)
 
     # format dataset for yolov8
     format_datasets(DATASETS_DIR, DATA_YAML, DATA_DEST_DIR)

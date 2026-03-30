@@ -4,11 +4,19 @@ import onnxruntime as ort
 import os 
 import argparse
 from ultralytics import YOLO
+from ultralytics.nn.modules.head import Detect  # <-- 1. Added import for the patch
 from tqdm import tqdm
 
-
 def run_segmentation(video_path, model_path, output_path, img_size=1056):
+    # Load the model
     model = YOLO(model_path, task='segment')
+
+    # --- THE DYNAMIC PATCH FIX ---
+    # Inject the missing 'detect' method into the Segment head for older .pt files
+    for m in model.model.modules():
+        if m.__class__.__name__ == 'Segment':
+            m.detect = Detect.forward
+    # -----------------------------
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -23,14 +31,13 @@ def run_segmentation(video_path, model_path, output_path, img_size=1056):
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out_vid = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
-
-    frame_count = 0
-    with tqdm(total = total_frames, desc="Processing Video", unit="frame", ncols=100) as pbar:
+    with tqdm(total=total_frames, desc="Processing Video", unit="frame", ncols=100) as pbar:
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret:
                 break
 
+            # Predict and plot
             results = model.predict(source=frame, imgsz=img_size, verbose=False)
             annotated_frame = results[0].plot()
             out_vid.write(annotated_frame)

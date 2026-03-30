@@ -310,7 +310,20 @@ def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_d
         new_label_name = label_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".txt"
         img_dst = os.path.join(data_dest_dir + "data/valid/images/", dataset_path + "_" + new_image_name)
         label_dst = os.path.join(data_dest_dir + "data/valid/labels/", dataset_path + "_" + new_label_name)
-        copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
+        copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_
+
+    # Create a new image number to avoid overwriting images in the same chance they have the same name
+    new_image_uuid = 0
+    empty_frames_kept = 0
+    weighted_frames = {}
+    removed_frames = {}
+    train_frames = 0
+    valid_frames = 0
+    test_frames = 0
+    for img_src, label_src, dataset_path in tqdm.tqdm(training_data):
+        if (random.random() < TRAIN_PERCENTAGE):
+            new_image_name = img_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".jpg"
+            new_label_name = label_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".txt"frames)
         new_image_uuid += 1
         valid_frames += 1
     for img_src, label_src, dataset_path in tqdm.tqdm(test_data):
