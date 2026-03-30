@@ -120,7 +120,7 @@ def create_json_to_img_mapping(images_dir):
                 mapping[frame_num + '.json'] = img_name
             else:
                 # 00005.jpg → 00005.json
-                frame_num = str(int(name_wo_ext.split('.')[0]))
+                frame_num = name_wo_ext
                 mapping[frame_num + '.json'] = img_name
     return mapping
 
