@@ -4,18 +4,24 @@ import onnxruntime as ort
 import os 
 import argparse
 from ultralytics import YOLO
-from ultralytics.nn.modules.head import Detect  # <-- 1. Added import for the patch
+from ultralytics.nn.modules.head import Detect
 from tqdm import tqdm
 
 def run_segmentation(video_path, model_path, output_path, img_size=1056):
     # Load the model
+    # The YOLO class is a wrapper. The actual neural net is in model.model
     model = YOLO(model_path, task='segment')
 
     # --- THE DYNAMIC PATCH FIX ---
-    # Inject the missing 'detect' method into the Segment head for older .pt files
-    for m in model.model.modules():
-        if m.__class__.__name__ == 'Segment':
-            m.detect = Detect.forward
+    # We check if 'model.model' exists and is not a string (happens with some exports)
+    # This prevents the AttributeError: 'str' object has no attribute 'modules'
+    if hasattr(model, 'model') and not isinstance(model.model, str):
+        for m in model.model.modules():
+            if m.__class__.__name__ == 'Segment':
+                # Patching the detect method for older version compatibility
+                m.detect = Detect.forward
+    else:
+        print("Note: Model loaded via backend that doesn't support module patching (e.g. ONNX). Skipping patch.")
     # -----------------------------
 
     cap = cv2.VideoCapture(video_path)
@@ -38,7 +44,10 @@ def run_segmentation(video_path, model_path, output_path, img_size=1056):
                 break
 
             # Predict and plot
+            # model.predict handles both .pt and .onnx automatically
             results = model.predict(source=frame, imgsz=img_size, verbose=False)
+            
+            # Plot results on the frame
             annotated_frame = results[0].plot()
             out_vid.write(annotated_frame)
 
@@ -51,7 +60,7 @@ def run_segmentation(video_path, model_path, output_path, img_size=1056):
 def main():
     parser = argparse.ArgumentParser(description="Run YOLOv8 segmentation on a video.")
     parser.add_argument('--video_path', type=str, required=True, help='Path to input video')
-    parser.add_argument('--model_path', type=str, required=True, help='Path to YOLOv8 segmentation .pt model')
+    parser.add_argument('--model_path', type=str, required=True, help='Path to YOLOv8 segmentation (.pt or .onnx)')
     parser.add_argument('--output_path', type=str, required=True, help='Path to save annotated video')
     parser.add_argument('--imgsz', type=int, default=1056, help='Image size for YOLOv8 input')
 
