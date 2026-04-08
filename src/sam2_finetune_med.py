@@ -222,23 +222,25 @@ def copy_data_yaml(label_src : os.PathLike, img_src : os.PathLike, label_dst : o
                     shutil.copy(img_src, img_dst_with_weight)
                     generate_empty_label(label_dst_with_weight)
     else:
-        # CHANGED: Read and modify the original label file in place first
+        # Normalize every label row to class id 0 (single-class car) in memory.
+        # We never rewrite the source file — that would silently mutate the
+        # user's labeled data in place across runs.
         with open(label_src, 'r') as f_in:
             lines = f_in.readlines()
-        
-        with open(label_src, 'w') as f_out_orig:
-            for line in lines:
-                if line.startswith('2 '):
-                    f_out_orig.write('0' + line[1:])
-                else:
-                    f_out_orig.write(line)
+        normalized = []
+        for line in lines:
+            parts = line.strip().split()
+            if not parts:
+                continue
+            parts[0] = '0'
+            normalized.append(' '.join(parts) + '\n')
 
-        # Now proceed with copying the updated original file to the destinations
         for i in range(choose_dataset_weight(img_src, DATASET_WEIGHTS, weighted_frames, frames_removed)):
             img_dst_with_weight = img_dst[:-4] + "_" + str(i) + ".jpg"
             label_dst_with_weight = label_dst[:-4] + "_" + str(i) + ".txt"
             shutil.copy(img_src, img_dst_with_weight)
-            shutil.copy(label_src, label_dst_with_weight)
+            with open(label_dst_with_weight, 'w') as f_out:
+                f_out.writelines(normalized)
 
 def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_dest_dir : os.PathLike) -> None:
     """
@@ -418,8 +420,12 @@ def test_model(model : YOLO, test_results_path: os.PathLike, test_images_path: o
     if not os.path.exists(test_results_path):
         os.makedirs(test_results_path)
 
-    # Inferencee fine-tuned model on test images and save results
+    # Inference fine-tuned model on test images and save results. Skip any
+    # non-image entries (.DS_Store, labels.cache, etc.) so the loop doesn't crash.
+    image_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp')
     for file in os.listdir(test_images_path):
+        if not file.lower().endswith(image_exts):
+            continue
         file_path = os.path.join(test_images_path, file)
         output = model.predict(file_path)
         save_path = os.path.join(test_results_path, file)
@@ -494,6 +500,7 @@ def main():
         
         # can change naming convention if need be
         model_name = f"yolov8{MODEL_SIZE}_{DATE}_batch{ONNX_BATCH_SIZE}_{EPOCHS}epochs"
+        os.makedirs(MODELS_PATH, exist_ok=True)
         model_path = MODELS_PATH + model_name + '.pt'
         model.save(model_path)
         
