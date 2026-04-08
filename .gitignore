@@ -178,3 +178,10 @@ data/
 data.yaml
 datasets/
 src/runs/
+eval_data/
+sam2_labeled_data/
+
+# ----------------------------------------
+# OS
+# ----------------------------------------
+.DS_Store
