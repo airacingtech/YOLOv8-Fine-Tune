@@ -208,14 +208,14 @@ def choose_dataset_weight(img_src : os.PathLike, dataset_weight : dict, weighted
                     return 0
     return 1
 
-def copy_data_yaml(label_src : os.PathLike, img_src : os.PathLike, label_dst : os.PathLike, img_dst : os.PathLike, empty_frames_kept : int, weighted_frames : dict, frames_removed : dict) -> None:
+def copy_data_yaml(label_src : os.PathLike, img_src : os.PathLike, label_dst : os.PathLike, img_dst : os.PathLike, empty_frames_kept : list, weighted_frames : dict, frames_removed : dict) -> None:
     '''
     Copies the images and labels from one directory to another. Also handles the case where the label file is empty (i.e. does not exist).
     '''
     if not os.path.exists(label_src):
         if KEEP_EMPTY_FRAMES:
             if random.random() < PERCENTAGE_EMPTY_FRAMES_TO_KEEP:
-                empty_frames_kept += 1
+                empty_frames_kept[0] += 1
                 for i in range(choose_dataset_weight(img_src, DATASET_WEIGHTS, weighted_frames, frames_removed)):
                     img_dst_with_weight = img_dst[:-4] + "_" + str(i) + ".jpg"
                     label_dst_with_weight = label_dst[:-4] + "_" + str(i) + ".txt"
@@ -295,7 +295,7 @@ def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_d
 
     # Create a new image number to avoid overwriting images in the same chance they have the same name
     new_image_uuid = 0
-    empty_frames_kept = 0
+    empty_frames_kept = [0]
     weighted_frames = {}
     removed_frames = {}
     train_frames = 0
@@ -330,7 +330,7 @@ def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_d
     # Copy over data.yaml file from root directory
     shutil.copy(data_yaml, data_dest_dir + "data/")
     print("Copied over 'data.yaml' file")
-    print("Number of empty frames kept: ", empty_frames_kept)
+    print("Number of empty frames kept: ", empty_frames_kept[0])
 
     print("Number of training frames: ", train_frames)
     print("Number of validation frames: ", valid_frames)
