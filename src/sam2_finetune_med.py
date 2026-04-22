@@ -28,33 +28,43 @@ IMG_SIZE = 1056       # CHANGED: SET TO 1056 TO BE DIVISIBLE BY 32
 LAYER_FREEZE = 10     # CHANGED: INCREASED FROM 0 TO 10 TO FREEZE THE BACKBONE
 
 # Amount to use different data augmentations
-HSV_H = 0.1           # RESTORED: KEPT YOUR ORIGINAL 0.1 VALUE
-HSV_S = 0.7           # RESTORED: KEPT YOUR ORIGINAL 0.7 VALUE
-HSV_V = 0.4           # RESTORED: KEPT YOUR ORIGINAL 0.4 VALUE
-DEGREES = 45.0        # CHANGED: INCREASED FROM 0.4 TO ROTATE IMAGE RANDOMLY UP TO 45 DEGREES
+HSV_H = 0.1
+HSV_S = 0.7
+HSV_V = 0.4
+DEGREES = 10.0        # Reduced from 45.0: extreme rotation produces geometrically invalid samples,
+                      # especially compounding barrel distortion on fisheye frames.
 TRANSLATE = 0.3
 SCALE = 0.5
 SHEAR = 0.01
-PERSPECTIVE = 0.001
-FLIPUD = 0.0          # CHANGED: REDUCED FROM 0.3 TO 0.0 BECAUSE CARS DON'T APPEAR UPSIDE DOWN
-FLIPLR = 0.5          # CHANGED: INCREASED FROM 0.3 TO 0.5 FOR 50% CHANCE OF HORIZONTAL FLIP
-BGR = 0.1             # Flips channels from RGB to BGR
-MOSAIC = 0.5          
-MIXUP = 0.5
-COPY_PASTE = 0.4
+PERSPECTIVE = 0.0     # Disabled: perspective warp applied on top of fisheye distortion is nonphysical.
+FLIPUD = 0.0          # Cars don't appear upside down.
+FLIPLR = 0.5          # Symmetric left/right track views — 50% horizontal flip is appropriate.
+BGR = 0.0             # Disabled: channel-order inversion teaches tolerance for color-space bugs
+                      # that are not expected in the controlled ART deployment pipeline.
+MIXUP = 0.0           # Disabled: blending two images creates ghostly car overlaps that are not
+                      # physically plausible. Ultralytics default is 0.0.
+COPY_PASTE = 0.1      # Reduced from 0.4: cars are position-constrained (track surface only);
+                      # pasting at high probability places them in physically impossible locations.
 ERASING = 0.2
 CROP_FRACTION = 0.1
 
-# CHANGED: ADDED THE FOLLOWING 4 LEARNING RATE PARAMETERS FOR FINE-TUNING
-LR0 = 0.001           # CHANGED: ADDED LOWER INITIAL LEARNING RATE
-LRF = 0.01            # CHANGED: ADDED FINAL LEARNING RATE FACTOR
-WARMUP_EPOCHS = 3     # CHANGED: ADDED WARMUP EPOCHS
-CLOSE_MOSAIC = 10     # CHANGED: ADDED TO TURN OFF MOSAIC FOR FINAL 10 EPOCHS
+# NOTE: MOSAIC is silently disabled by Ultralytics when rect=True (used below for efficient
+# landscape batching). rect=True requires uniform aspect-ratio batching, which is incompatible
+# with mosaic's 2x2 square-tile grid. MOSAIC and CLOSE_MOSAIC are therefore not passed to
+# model.train() and have no effect on training.
+
+LR0 = 0.001           # Lower initial LR for fine-tuning from pretrained weights
+LRF = 0.01            # Final LR factor
+WARMUP_EPOCHS = 3     # Gradual warmup to avoid destabilizing pretrained features early
 
 # Dictionary to weight dataset (randomly removed images with given probability
-# or duplicate images)
+# or duplicate images).
+# WARNING: Any bag whose directory name contains a key substring will be
+# silently downsampled or duplicated. For example, 'large': 0.1 drops 90% of
+# frames from any bag named e.g. "large_oval_track". Update or clear this dict
+# whenever you add new bags to avoid silent data loss.
 DATASET_WEIGHTS = {
-    'large': 0.1 # Remove extra images from dataset with no frameskipping
+    'large': 0.1  # Drop 90% of frames from bags whose name contains 'large'
 }
 
 # Whether or not to use hyperparameter tuning
@@ -73,9 +83,6 @@ TRAIN_PERCENTAGE = 1.0
 KEEP_EMPTY_FRAMES = True
 # Percentage of empty frames to keep in the dataset if KEEP_EMPTY_FRAMES is True (randomly sampled)
 PERCENTAGE_EMPTY_FRAMES_TO_KEEP = 0.8
-
-# Path to trained model weights
-MODELS_PATH = WORKSPACE_DIR + '/models/'
 
 # This line prevents the Kernel from crashing when running model.train() which calls a plotting function
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
@@ -98,10 +105,18 @@ def mask_to_polygon(mask):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_TC89_L1)
     if len(contours) == 0:
         return []
-    contours = [contour for contour in contours if len(contour) > 0]
-    contours = [np.squeeze(contour, axis=1) for contour in contours]
     ret_contours = []
-    for contour in contours:
+    for raw_contour in contours:
+        if len(raw_contour) == 0:
+            continue
+        # Simplify contour to reduce vertex count while preserving car shape.
+        # epsilon = 0.1% of perimeter keeps the outline tight without hundreds of redundant
+        # points, which would slow YOLO's label parser and waste disk space.
+        epsilon = 0.001 * cv2.arcLength(raw_contour, True)
+        simplified = cv2.approxPolyDP(raw_contour, epsilon, True)
+        contour = np.squeeze(simplified, axis=1)
+        if len(contour) < 3:
+            continue
         contour = np.array(contour, dtype=float)
         contour[:, 0] = contour[:, 0] / img_width
         contour[:, 1] = contour[:, 1] / img_height
@@ -242,39 +257,74 @@ def copy_data_yaml(label_src : os.PathLike, img_src : os.PathLike, label_dst : o
             with open(label_dst_with_weight, 'w') as f_out:
                 f_out.writelines(normalized)
 
-def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_dest_dir : os.PathLike) -> None:
+def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> None:
     """
-    Takes in a directory of datasets where each dataset is in the format of a COCO dataset
-    and then formats the datasets into a single dataset that YOLOv8 can use for training
-    placed in the 'data/' directory. This function will delete the 'data/' directory and recreate
-    it. The data.yaml file must be created manually and will be copied over to the 'data/'
-    directory. The function will also split the data into training, validation, and test sets.
+    Takes in a directory of bag datasets (each bag contains images/ and labels/
+    subdirectories) and formats them into a single dataset that YOLOv8 can use for
+    training, placed in <data_dest_dir>/data/.
+
+    This function deletes and recreates <data_dest_dir>/data/ on each run.
+    A data.yaml is auto-generated with nc=1 and class name 'car'.
+
+    IMPORTANT: The dataset is split at the BAG level (not frame level). Adjacent
+    frames within a ROS bag are temporally near-identical (same lighting, same car
+    positions, often < 100 ms apart). A per-frame shuffle would allow near-duplicate
+    pairs across train and val, inflating val mAP by 5-15 points without reflecting
+    real generalization. Bag-level splitting ensures the model is evaluated on footage
+    it has never seen at all.
     """
     assert os.path.exists(datasets_path), f"The dataset path, {datasets_path}, does not exist."
-    assert os.path.exists(data_yaml), f"The data.yaml file, {data_yaml}, does not exist."
 
-    print("Extracting sim images from:", datasets_path, "for training/validation data")
+    print("Formatting dataset from:", datasets_path)
 
-    # Get all images and labels from the datasets
-    datasets_labels = []
-    for dataset_path in os.listdir(datasets_path):
+    # Group frames by bag. Skip non-directory entries (.DS_Store, stray .yaml files, etc.)
+    # and bags that don't have an images/ subdirectory.
+    bags = {}
+    for dataset_path in sorted(os.listdir(datasets_path)):
         full_path = os.path.join(datasets_path, dataset_path)
-        for img_file in os.listdir(full_path + "/images/"):
-            datasets_labels.append([full_path + "/images/" + img_file, full_path + "/labels/" + img_file[:-4] + ".txt", dataset_path])
+        if not os.path.isdir(full_path):
+            continue
+        img_dir = os.path.join(full_path, "images")
+        if not os.path.isdir(img_dir):
+            print(f"Skipping {dataset_path}: no images/ subdirectory found")
+            continue
+        bags[dataset_path] = [
+            [os.path.join(full_path, "images", img_file),
+             os.path.join(full_path, "labels", os.path.splitext(img_file)[0] + ".txt"),
+             dataset_path]
+            for img_file in sorted(os.listdir(img_dir))
+        ]
 
-    # Sort images by filename
-    datasets_labels = sorted(datasets_labels, key = lambda x: x[0])
-
-    # Shuffle images deterministically with seed
+    # Split at the BAG level to avoid temporal leakage between train / val / test.
+    bag_names = sorted(bags.keys())
     random.seed(0)
-    random.shuffle(datasets_labels)
+    random.shuffle(bag_names)
 
-    # Split 70% training, 20% validation, 10% test
-    training_data = datasets_labels[:len(datasets_labels) * 7 // 10]
-    valid_data = datasets_labels[len(datasets_labels) * 7 // 10 :len(datasets_labels) * 9 // 10]
-    test_data = datasets_labels[len(datasets_labels) * 9 // 10 :]
+    n = len(bag_names)
+    train_bags = bag_names[:n * 7 // 10]
+    val_bags   = bag_names[n * 7 // 10 : n * 9 // 10]
+    test_bags  = bag_names[n * 9 // 10 :]
 
-    # Create the directories for the training, validation, and test data
+    # Guarantee at least 1 bag in val and test even with very small datasets.
+    if not val_bags and len(train_bags) > 2:
+        val_bags = [train_bags.pop()]
+    if not test_bags and len(train_bags) > 1:
+        test_bags = [train_bags.pop()]
+
+    print(f"Train bags ({len(train_bags)}): {train_bags}")
+    print(f"Val bags   ({len(val_bags)}):   {val_bags}")
+    print(f"Test bags  ({len(test_bags)}):  {test_bags}")
+
+    # Flatten bags into frame lists, then shuffle within each split.
+    training_data = [f for b in train_bags for f in bags[b]]
+    valid_data    = [f for b in val_bags   for f in bags[b]]
+    test_data     = [f for b in test_bags  for f in bags[b]]
+
+    random.shuffle(training_data)
+    random.shuffle(valid_data)
+    random.shuffle(test_data)
+
+    # Create the directories for the training, validation, and test data.
     if os.path.exists(data_dest_dir + "data/"):
         print("Deleting and recreating 'data/' folder...")
         shutil.rmtree(data_dest_dir + "data/")
@@ -289,11 +339,19 @@ def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_d
     os.mkdir(data_dest_dir + "data/test/images/")
     os.mkdir(data_dest_dir + "data/test/labels/")
 
-    # Copy over images and labels to new directories
-    print("Copying images and labels to new directories...")
-    print("Copying training data:")
+    # Auto-generate data.yaml for single-class car detection.
+    # Paths are relative to data/ (Ultralytics resolves them against the yaml location).
+    with open(data_dest_dir + "data/data.yaml", 'w') as f:
+        f.write("train: train/images\n")
+        f.write("val:   valid/images\n")
+        f.write("test:  test/images\n\n")
+        f.write("nc: 1\n\n")
+        f.write("names:\n")
+        f.write("  0: car\n")
+    print(f"Generated {data_dest_dir}data/data.yaml")
 
-    # Create a new image number to avoid overwriting images in the same chance they have the same name
+    # Copy over images and labels to new directories.
+    print("Copying images and labels to new directories...")
     new_image_uuid = 0
     empty_frames_kept = [0]
     weighted_frames = {}
@@ -301,6 +359,8 @@ def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_d
     train_frames = 0
     valid_frames = 0
     test_frames = 0
+
+    print("Copying training data:")
     for img_src, label_src, dataset_path in tqdm.tqdm(training_data):
         if (random.random() < TRAIN_PERCENTAGE):
             new_image_name = img_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".jpg"
@@ -327,11 +387,7 @@ def format_datasets(datasets_path : os.PathLike, data_yaml : os.PathLike, data_d
         new_image_uuid += 1
         test_frames += 1
 
-    # Copy over data.yaml file from root directory
-    shutil.copy(data_yaml, data_dest_dir + "data/")
-    print("Copied over 'data.yaml' file")
     print("Number of empty frames kept: ", empty_frames_kept[0])
-
     print("Number of training frames: ", train_frames)
     print("Number of validation frames: ", valid_frames)
     print("Number of test frames: ", test_frames)
@@ -363,24 +419,27 @@ def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
     start_time = time.time()
     model_name = f'yolov8{model_size}-img_size_{IMG_SIZE}_layers_frozen_{LAYER_FREEZE}_{DATE}'
     
-    # By default, the model trains on a single GPU
+    # By default, the model trains on a single GPU.
+    # rect=True enables efficient landscape batching by grouping images with similar
+    # aspect ratios. NOTE: Ultralytics silently disables mosaic when rect=True because
+    # mosaic requires square 2x2 tiling — so mosaic and close_mosaic are not passed here.
     model.train(
         data=curr_data_yaml,
         imgsz=IMG_SIZE,
-        rect=True,               # CHANGED: ADDED FOR EFFICIENT LANDSCAPE BATCHING
+        rect=True,
         epochs=EPOCHS,
         freeze=LAYER_FREEZE,
         amp=True,
-        cache="disk", 
+        cache="disk",
         save=True,
         save_period=5,
         name=model_name,
-        
-        lr0=LR0,                 # CHANGED: ADDED LOWER INITIAL LEARNING RATE
-        lrf=LRF,                 # CHANGED: ADDED FINAL LEARNING RATE FACTOR
-        warmup_epochs=WARMUP_EPOCHS, # CHANGED: ADDED GRADUAL WARMUP
-        close_mosaic=CLOSE_MOSAIC,   # CHANGED: ADDED TO TURN OFF MOSAIC AT THE END
-        
+        seed=0,
+
+        lr0=LR0,
+        lrf=LRF,
+        warmup_epochs=WARMUP_EPOCHS,
+
         hsv_h=HSV_H,
         hsv_s=HSV_S,
         hsv_v=HSV_V,
@@ -391,7 +450,6 @@ def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
         perspective=PERSPECTIVE,
         flipud=FLIPUD,
         fliplr=FLIPLR,
-        mosaic=MOSAIC,
         mixup=MIXUP,
         copy_paste=COPY_PASTE,
         erasing=ERASING,
@@ -440,41 +498,45 @@ def main():
     # arg parse
     parser = argparse.ArgumentParser(description="Fine-tune YOLOv8 model on SAM2 dataset.")
     parser.add_argument("dataset_dir", type=str, help="Path to SAM2 dataset directory")
-    parser.add_argument("data_yaml", type=str, help="Path to data.yaml file")
     parser.add_argument("data_dest_dir", type=str, help="Path to destination directory for formatted dataset")
     parser.add_argument("--resume", action="store_true", help="Resume training from checkpoint")
     parser.add_argument("--resume_path", type=str, default=None, help="Path to checkpoint to resume training from")
-    
-    parser.add_argument("--model_size", type=str, default='m', choices=['n', 's', 'm', 'l', 'x'], help="Size of YOLOv8 model to use") # CHANGED: DEFAULT CHANGED TO 'm' AND ADDED CHOICES
+    parser.add_argument("--model_size", type=str, default='m', choices=['n', 's', 'm', 'l', 'x'], help="Size of YOLOv8 model to use")
     parser.add_argument("--format_only", action="store_true", default=False, help="Only format the dataset without training")
-    parser.add_argument("--finetune_only", action="store_true", default=False, help="Only run the fine-tuning without performing sam2 data conversion")
+    parser.add_argument("--finetune_only", action="store_true", default=False, help="Skip SAM2->label conversion and dataset formatting; train directly on existing data/")
 
     args = parser.parse_args()
 
     DATASETS_DIR = args.dataset_dir
-    DATA_YAML = args.data_yaml
     DATA_DEST_DIR = args.data_dest_dir
 
     data_dir = DATA_DEST_DIR + 'data/'
     curr_data_yaml = data_dir + 'data.yaml'
-    TEST_PATH = data_dir + '/test/images/'
+    TEST_PATH = data_dir + 'test/images/'
 
     RESUME_TRAINING = args.resume
     RESUME_TRAINING_PATH = args.resume_path
     MODEL_SIZE = args.model_size
     FORMAT_ONLY = args.format_only
     FINETUNE_ONLY = args.finetune_only
-    if not FINETUNE_ONLY:
-        # convert sam2 masks to labels
-        format_sam2_labels(DATASETS_DIR)
 
-    # format dataset for yolov8
-    format_datasets(DATASETS_DIR, DATA_YAML, DATA_DEST_DIR)
+    if not FINETUNE_ONLY:
+        # Convert SAM2 masks to YOLO polygon labels, then build the train/val/test split.
+        format_sam2_labels(DATASETS_DIR)
+        format_datasets(DATASETS_DIR, DATA_DEST_DIR)
+    else:
+        # --finetune_only: skip conversion and dataset rebuild entirely.
+        # data/ must already exist from a previous run of format_datasets.
+        if not os.path.exists(data_dir):
+            print(f"ERROR: --finetune_only was set but no formatted dataset found at {data_dir}. "
+                  f"Run without --finetune_only first to build the dataset.")
+            return
+        print(f"--finetune_only: using existing dataset at {data_dir}")
+
     if FORMAT_ONLY:
         print("Dataset formatted. Exiting...")
         return
     
-    # check system info - could just comment these out
     print("CUDA Available: " + str(torch.cuda.is_available()))
     print("Torch CUDA Version: " + str(torch.version.cuda))
     ultralytics.utils.checks.collect_system_info()
@@ -495,16 +557,12 @@ def main():
         train_model(model, curr_data_yaml, MODEL_SIZE)
         epochs_done += EPOCHS
         tune_model(model)
-        test_results_path = data_dir + '/test/annotation_results' + f'_{epochs_done}epochs'
+        test_results_path = data_dir + 'test/annotation_results' + f'_{epochs_done}epochs'
         test_model(model, test_results_path, TEST_PATH)
-        
-        # can change naming convention if need be
-        model_name = f"yolov8{MODEL_SIZE}_{DATE}_batch{ONNX_BATCH_SIZE}_{EPOCHS}epochs"
-        os.makedirs(MODELS_PATH, exist_ok=True)
-        model_path = MODELS_PATH + model_name + '.pt'
-        model.save(model_path)
-        
-        model.export(format='onnx', batch=ONNX_BATCH_SIZE, imgsz=IMG_SIZE, dynamic=False) # CHANGED: ENFORCED IMGSZ AND DYNAMIC=FALSE FOR ONNX EXPORT
+
+        # model.train() saves best.pt and last.pt under runs/segment/<run_name>/weights/.
+        # Use best.pt from that directory as the canonical trained checkpoint.
+        model.export(format='onnx', batch=ONNX_BATCH_SIZE, imgsz=IMG_SIZE, dynamic=False)
 
 if __name__ == "__main__":
     main()
