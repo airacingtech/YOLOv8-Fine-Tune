@@ -277,6 +277,7 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
 
     # Group frames by bag. Skip non-directory entries (.DS_Store, stray .yaml files, etc.)
     # and bags that don't have an images/ subdirectory.
+    image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
     bags = {}
     for dataset_path in sorted(os.listdir(datasets_path)):
         full_path = os.path.join(datasets_path, dataset_path)
@@ -286,7 +287,6 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
         if not os.path.isdir(img_dir):
             print(f"Skipping {dataset_path}: no images/ subdirectory found")
             continue
-        image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
         bags[dataset_path] = [
             [os.path.join(full_path, "images", img_file),
              os.path.join(full_path, "labels", os.path.splitext(img_file)[0] + ".txt"),
@@ -410,6 +410,7 @@ def choose_model_size(model_size) -> str:
     print(f"Using YOLOv8 {name} model")
     return weights
 
+
 def train_model(model: YOLO, curr_data_yaml: str, model_size: str) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
@@ -460,6 +461,7 @@ def train_model(model: YOLO, curr_data_yaml: str, model_size: str) -> None:
     training_time = end_time - start_time
     print("Time to train: ", training_time)
 
+
 def tune_model(model: YOLO) -> None:
     # Runs a hyperparameter sweep and selects the best hyperparameters
     if HYPERPARAMETER_TUNING:
@@ -491,6 +493,7 @@ def test_model(model: YOLO, test_results_path: os.PathLike, test_images_path: os
 
 
 # ========== MAIN FUNCTION ========== #
+
 def main():
     # arg parse
     parser = argparse.ArgumentParser(description="Fine-tune YOLOv8 model on SAM2 dataset.")
