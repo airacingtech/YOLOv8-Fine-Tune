@@ -111,8 +111,9 @@ The script will:
    top of the script — `IMG_SIZE=1056`, `LAYER_FREEZE=10`, augmentation knobs,
    etc.).
 6. Run inference on the held-out test split and save annotated frames.
-7. Export a batch-1 `.onnx` at `IMG_SIZE=1056`. The canonical `.pt` checkpoint
-   is saved by Ultralytics to `runs/segment/<run_name>/weights/best.pt`.
+7. Export a batch-1 `.onnx` at `IMG_SIZE=1056`. Both the `.pt` checkpoint and
+   the `.onnx` export are saved by Ultralytics to
+   `runs/segment/<run_name>/weights/` (relative to `src/`).
 
 ### Arguments
 
@@ -186,9 +187,10 @@ shell).
 Runs a trained model over a video and writes an annotated `.mp4`:
 
 ```bash
+# Weights are saved to runs/segment/<run_name>/weights/ after training.
 python onnx_inference.py \
     --video_path  ../videos/ims_run1_front.mp4 \
-    --model_path  ../models/best.onnx \
+    --model_path  runs/segment/<run_name>/weights/best.onnx \
     --output_path ../videos/ims_run1_front_annotated.mp4 \
     --imgsz 1056
 ```

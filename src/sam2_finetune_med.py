@@ -85,7 +85,7 @@ KEEP_EMPTY_FRAMES = True
 PERCENTAGE_EMPTY_FRAMES_TO_KEEP = 0.8
 
 # This line prevents the Kernel from crashing when running model.train() which calls a plotting function
-os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # Batch size for TensorRT / ONNX export
 ONNX_BATCH_SIZE = 1
@@ -193,24 +193,24 @@ def format_sam2_labels(datasets_dir):
 
 # ========== DATASET PROCESSING FOR YOLO ========== #
 
-def generate_empty_label(label_dst : os.PathLike) -> None:
-    '''
+def generate_empty_label(label_dst: os.PathLike) -> None:
+    """
     Generates an empty label file with the correct format to handle empty frames.
-    '''
+    """
     with open(label_dst, 'w') as f:
         f.write("")
 
-def choose_dataset_weight(img_src : os.PathLike, dataset_weight : dict, weighted_frames : dict, frames_removed : dict) -> int:
-    '''
+def choose_dataset_weight(img_src: os.PathLike, dataset_weight: dict, weighted_frames: dict, frames_removed: dict) -> int:
+    """
     Returns a dataset weight to use dataset_weights dictionary. Uses the file path to determine the dataset.
-    '''
+    """
     dataset_name = os.path.basename(os.path.dirname(os.path.dirname(img_src)))
     for dataset, weight in dataset_weight.items():
         if dataset in dataset_name:
             # If weight is greater than 1, keep the frame and create additional frames with the same image and label
             if weight > 1:
                 weighted_frames[dataset] = weighted_frames.get(dataset, 0) + (weight - 1)
-                return weight
+                return int(weight)
             # If weight is less than 1, randomly choose to keep the frame or not
             else:
                 # Keep the frame with probability weight
@@ -222,10 +222,11 @@ def choose_dataset_weight(img_src : os.PathLike, dataset_weight : dict, weighted
                     return 0
     return 1
 
-def copy_data_yaml(label_src : os.PathLike, img_src : os.PathLike, label_dst : os.PathLike, img_dst : os.PathLike, empty_frames_kept : list, weighted_frames : dict, frames_removed : dict) -> None:
-    '''
-    Copies the images and labels from one directory to another. Also handles the case where the label file is empty (i.e. does not exist).
-    '''
+def copy_frame_pair(label_src: os.PathLike, img_src: os.PathLike, label_dst: os.PathLike, img_dst: os.PathLike, empty_frames_kept: list, weighted_frames: dict, frames_removed: dict) -> None:
+    """
+    Copies image/label pairs to the destination directory.
+    Generates an empty label if no label file exists (frame has no cars).
+    """
     if not os.path.exists(label_src):
         if KEEP_EMPTY_FRAMES:
             if random.random() < PERCENTAGE_EMPTY_FRAMES_TO_KEEP:
@@ -285,11 +286,13 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
         if not os.path.isdir(img_dir):
             print(f"Skipping {dataset_path}: no images/ subdirectory found")
             continue
+        image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tif', '.tiff', '.webp'}
         bags[dataset_path] = [
             [os.path.join(full_path, "images", img_file),
              os.path.join(full_path, "labels", os.path.splitext(img_file)[0] + ".txt"),
              dataset_path]
             for img_file in sorted(os.listdir(img_dir))
+            if os.path.splitext(img_file)[1].lower() in image_exts
         ]
 
     # Split at the BAG level to avoid temporal leakage between train / val / test.
@@ -357,12 +360,12 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
 
     print("Copying training data:")
     for img_src, label_src, dataset_path in tqdm.tqdm(training_data):
-        if (random.random() < TRAIN_PERCENTAGE):
+        if random.random() < TRAIN_PERCENTAGE:
             stem = os.path.splitext(os.path.basename(img_src))[0]
             fname = f"{dataset_path}_{stem}_{new_image_uuid}"
             img_dst   = os.path.join(data_root, "train", "images", fname + ".jpg")
             label_dst = os.path.join(data_root, "train", "labels", fname + ".txt")
-            copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
+            copy_frame_pair(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
             new_image_uuid += 1
             train_frames += 1
     for img_src, label_src, dataset_path in tqdm.tqdm(valid_data):
@@ -370,7 +373,7 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
         fname = f"{dataset_path}_{stem}_{new_image_uuid}"
         img_dst   = os.path.join(data_root, "valid", "images", fname + ".jpg")
         label_dst = os.path.join(data_root, "valid", "labels", fname + ".txt")
-        copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
+        copy_frame_pair(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
         new_image_uuid += 1
         valid_frames += 1
     for img_src, label_src, dataset_path in tqdm.tqdm(test_data):
@@ -378,7 +381,7 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
         fname = f"{dataset_path}_{stem}_{new_image_uuid}"
         img_dst   = os.path.join(data_root, "test", "images", fname + ".jpg")
         label_dst = os.path.join(data_root, "test", "labels", fname + ".txt")
-        copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
+        copy_frame_pair(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
         new_image_uuid += 1
         test_frames += 1
 
@@ -390,7 +393,9 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
     print("Number of frames removed for each dataset: ", removed_frames)
     print("Finished creating directories for YOLOv8 training pipeline")
 
+
 # ========== TRAINING YOLOv8 ========== #
+
 def choose_model_size(model_size) -> str:
     sizes = {
         'n': ('Nano',        'yolov8n-seg.pt'),
@@ -405,7 +410,7 @@ def choose_model_size(model_size) -> str:
     print(f"Using YOLOv8 {name} model")
     return weights
 
-def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
+def train_model(model: YOLO, curr_data_yaml: str, model_size: str) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     start_time = time.time()
@@ -455,7 +460,7 @@ def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
     training_time = end_time - start_time
     print("Time to train: ", training_time)
 
-def tune_model(model : YOLO) -> None:
+def tune_model(model: YOLO) -> None:
     # Runs a hyperparameter sweep and selects the best hyperparameters
     if HYPERPARAMETER_TUNING:
         model.tune(use_ray=USE_RAY_TUNE, iterations=TUNE_ITERS)
@@ -463,7 +468,7 @@ def tune_model(model : YOLO) -> None:
         print("Skipping hyperparameter tuning")
 
 
-def test_model(model : YOLO, test_results_path: os.PathLike, test_images_path: os.PathLike) -> None:
+def test_model(model: YOLO, test_results_path: os.PathLike, test_images_path: os.PathLike) -> None:
     """
     Test the fine-tuned model on test images and save the results.
     """
@@ -503,13 +508,10 @@ def main():
     FINETUNE_ONLY = args.finetune_only
 
     if FORMAT_ONLY and FINETUNE_ONLY:
-        print("ERROR: --format_only and --finetune_only are mutually exclusive.")
-        return
+        parser.error("--format_only and --finetune_only are mutually exclusive.")
 
     DATASETS_DIR = args.dataset_dir
-    # Normalize trailing slash so path concatenation is always correct regardless
-    # of whether the user passes 'path/to/dir' or 'path/to/dir/'.
-    DATA_DEST_DIR = args.data_dest_dir.rstrip('/') + '/'
+    DATA_DEST_DIR = args.data_dest_dir
 
     data_dir = os.path.join(DATA_DEST_DIR, "data")
     curr_data_yaml = os.path.join(data_dir, "data.yaml")
@@ -543,8 +545,7 @@ def main():
     # Load YOLOv8 segmentation model
     if RESUME_TRAINING:
         if RESUME_TRAINING_PATH is None:
-            print("ERROR: --resume requires --resume_path to be set.")
-            return
+            parser.error("--resume requires --resume_path to be set.")
         model = YOLO(RESUME_TRAINING_PATH)
     else:
         model = YOLO(choose_model_size(MODEL_SIZE))
