@@ -1,3 +1,9 @@
+# NOTE: This file pins the exact environment used for ART training and is known
+# to work on the lab GPU machines. It contains both CUDA 11.8 and CUDA 12.1
+# packages because the pip wheels (nvidia-cublas-cu11, nvidia-cublas-cu12, etc.)
+# were installed alongside the conda CUDA 12.1 runtime. On a fresh machine this
+# may cause libcublas version conflicts. If conda env create fails, use
+# requirements.txt with a clean PyTorch + CUDA 12.1 install instead.
 name: yolo-env
 channels:
   - pytorch

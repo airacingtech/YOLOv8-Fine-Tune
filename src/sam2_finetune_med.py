@@ -15,17 +15,17 @@ import argparse
 # ========== DIRECTORIES ========== #
 
 CURR_DIR = os.getcwd()
-# this should just be the path to the yolo-finetune repo
+# When run from src/ as documented, CURR_DIR is .../YOLOv8-Fine-Tune/src
+# and WORKSPACE_DIR resolves to .../YOLOv8-Fine-Tune (the repo root).
 WORKSPACE_DIR = os.path.dirname(CURR_DIR)
 
 
 # ========== YOLO PARAMS ========== #
 
 # Change these parameters to fit your needs
-EPOCHS = 50           # CHANGED: REDUCED FROM 100 FOR FINE-TUNING
-NUM_TRAIN_LOOPS = 1
-IMG_SIZE = 1056       # CHANGED: SET TO 1056 TO BE DIVISIBLE BY 32
-LAYER_FREEZE = 10     # CHANGED: INCREASED FROM 0 TO 10 TO FREEZE THE BACKBONE
+EPOCHS = 50           # Reduced from 100; sufficient for fine-tuning from pretrained weights
+IMG_SIZE = 1056       # Must be divisible by 32; matches ART camera resolution
+LAYER_FREEZE = 10     # Freeze the first 10 layers (backbone) to preserve pretrained features
 
 # Amount to use different data augmentations
 HSV_H = 0.1
@@ -76,7 +76,7 @@ TUNE_ITERS = 5
 
 # ========== TRAINING PARAMS ========== #
 
-# Percetnage of dataset to use for training
+# Percentage of dataset to use for training
 TRAIN_PERCENTAGE = 1.0
 
 # Whether or not to keep empty frames (frames with no labels) in the dataset
@@ -87,18 +87,17 @@ PERCENTAGE_EMPTY_FRAMES_TO_KEEP = 0.8
 # This line prevents the Kernel from crashing when running model.train() which calls a plotting function
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 
-# This is the Tensorrt batch size 
+# Batch size for TensorRT / ONNX export
 ONNX_BATCH_SIZE = 1
 
-# Todays data + Batch size + epochs
+# Timestamp used in run and export naming
 DATE = time.strftime('%Y-%m-%d-%H-%M-%S')
 
 
 # ========== SAM2 DATASET PROCESSING ========== #
 
-# function that takes a mask of 1s and 0s and converts to polygon using cv2
-# NOTE: this should support multiple detections in the same frame, but hasn't been tested
-
+# Converts a binary mask (2D array of 0s and 1s) to normalized YOLO polygon(s).
+# Supports multiple detections per frame — each contour becomes a separate polygon entry.
 def mask_to_polygon(mask):
     img_width = mask.shape[1]
     img_height = mask.shape[0]
@@ -168,7 +167,7 @@ def format_sam2_labels_dir(images_dir, masks_dir, dest_dir):
                 for polygon in polygons:
                     if len(polygon) < 3:
                         continue
-                    string_to_write += "0" # CHANGED: REPLACED "2" WITH "0" SO MASKS MAP TO CLASS 0
+                    string_to_write += "0"  # class 0 = car (single-class)
                     for point in polygon:
                         string_to_write += f" {point[0]} {point[1]}"
                     string_to_write += "\n"
@@ -205,7 +204,7 @@ def choose_dataset_weight(img_src : os.PathLike, dataset_weight : dict, weighted
     '''
     Returns a dataset weight to use dataset_weights dictionary. Uses the file path to determine the dataset.
     '''
-    dataset_name = img_src.split("/")[-3]
+    dataset_name = os.path.basename(os.path.dirname(os.path.dirname(img_src)))
     for dataset, weight in dataset_weight.items():
         if dataset in dataset_name:
             # If weight is greater than 1, keep the frame and create additional frames with the same image and label
@@ -232,10 +231,9 @@ def copy_data_yaml(label_src : os.PathLike, img_src : os.PathLike, label_dst : o
             if random.random() < PERCENTAGE_EMPTY_FRAMES_TO_KEEP:
                 empty_frames_kept[0] += 1
                 for i in range(choose_dataset_weight(img_src, DATASET_WEIGHTS, weighted_frames, frames_removed)):
-                    img_dst_with_weight = img_dst[:-4] + "_" + str(i) + ".jpg"
-                    label_dst_with_weight = label_dst[:-4] + "_" + str(i) + ".txt"
-                    shutil.copy(img_src, img_dst_with_weight)
-                    generate_empty_label(label_dst_with_weight)
+                    stem = os.path.splitext(img_dst)[0]
+                    shutil.copy(img_src, stem + f"_{i}.jpg")
+                    generate_empty_label(stem + f"_{i}.txt")
     else:
         # Normalize every label row to class id 0 (single-class car) in memory.
         # We never rewrite the source file — that would silently mutate the
@@ -251,10 +249,9 @@ def copy_data_yaml(label_src : os.PathLike, img_src : os.PathLike, label_dst : o
             normalized.append(' '.join(parts) + '\n')
 
         for i in range(choose_dataset_weight(img_src, DATASET_WEIGHTS, weighted_frames, frames_removed)):
-            img_dst_with_weight = img_dst[:-4] + "_" + str(i) + ".jpg"
-            label_dst_with_weight = label_dst[:-4] + "_" + str(i) + ".txt"
-            shutil.copy(img_src, img_dst_with_weight)
-            with open(label_dst_with_weight, 'w') as f_out:
+            stem = os.path.splitext(img_dst)[0]
+            shutil.copy(img_src, stem + f"_{i}.jpg")
+            with open(stem + f"_{i}.txt", 'w') as f_out:
                 f_out.writelines(normalized)
 
 def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> None:
@@ -325,30 +322,28 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
     random.shuffle(test_data)
 
     # Create the directories for the training, validation, and test data.
-    if os.path.exists(data_dest_dir + "data/"):
+    data_root = os.path.join(data_dest_dir, "data")
+    if os.path.exists(data_root):
         print("Deleting and recreating 'data/' folder...")
-        shutil.rmtree(data_dest_dir + "data/")
-    os.mkdir(data_dest_dir + "data/")
-    os.mkdir(data_dest_dir + "data/train/")
-    os.mkdir(data_dest_dir + "data/train/images/")
-    os.mkdir(data_dest_dir + "data/train/labels/")
-    os.mkdir(data_dest_dir + "data/valid/")
-    os.mkdir(data_dest_dir + "data/valid/images/")
-    os.mkdir(data_dest_dir + "data/valid/labels/")
-    os.mkdir(data_dest_dir + "data/test/")
-    os.mkdir(data_dest_dir + "data/test/images/")
-    os.mkdir(data_dest_dir + "data/test/labels/")
+        shutil.rmtree(data_root)
+    os.makedirs(os.path.join(data_root, "train", "images"))
+    os.makedirs(os.path.join(data_root, "train", "labels"))
+    os.makedirs(os.path.join(data_root, "valid", "images"))
+    os.makedirs(os.path.join(data_root, "valid", "labels"))
+    os.makedirs(os.path.join(data_root, "test", "images"))
+    os.makedirs(os.path.join(data_root, "test", "labels"))
 
     # Auto-generate data.yaml for single-class car detection.
     # Paths are relative to data/ (Ultralytics resolves them against the yaml location).
-    with open(data_dest_dir + "data/data.yaml", 'w') as f:
+    data_yaml_path = os.path.join(data_root, "data.yaml")
+    with open(data_yaml_path, 'w') as f:
         f.write("train: train/images\n")
         f.write("val:   valid/images\n")
         f.write("test:  test/images\n\n")
         f.write("nc: 1\n\n")
         f.write("names:\n")
         f.write("  0: car\n")
-    print(f"Generated {data_dest_dir}data/data.yaml")
+    print(f"Generated {data_yaml_path}")
 
     # Copy over images and labels to new directories.
     print("Copying images and labels to new directories...")
@@ -363,26 +358,26 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
     print("Copying training data:")
     for img_src, label_src, dataset_path in tqdm.tqdm(training_data):
         if (random.random() < TRAIN_PERCENTAGE):
-            new_image_name = img_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".jpg"
-            new_label_name = label_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".txt"
-            img_dst = os.path.join(data_dest_dir + "data/train/images/", dataset_path + "_" + new_image_name)
-            label_dst = os.path.join(data_dest_dir + "data/train/labels/", dataset_path + "_" + new_label_name)
+            stem = os.path.splitext(os.path.basename(img_src))[0]
+            fname = f"{dataset_path}_{stem}_{new_image_uuid}"
+            img_dst   = os.path.join(data_root, "train", "images", fname + ".jpg")
+            label_dst = os.path.join(data_root, "train", "labels", fname + ".txt")
             copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
             new_image_uuid += 1
             train_frames += 1
     for img_src, label_src, dataset_path in tqdm.tqdm(valid_data):
-        new_image_name = img_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".jpg"
-        new_label_name = label_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".txt"
-        img_dst = os.path.join(data_dest_dir + "data/valid/images/", dataset_path + "_" + new_image_name)
-        label_dst = os.path.join(data_dest_dir + "data/valid/labels/", dataset_path + "_" + new_label_name)
+        stem = os.path.splitext(os.path.basename(img_src))[0]
+        fname = f"{dataset_path}_{stem}_{new_image_uuid}"
+        img_dst   = os.path.join(data_root, "valid", "images", fname + ".jpg")
+        label_dst = os.path.join(data_root, "valid", "labels", fname + ".txt")
         copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
         new_image_uuid += 1
         valid_frames += 1
     for img_src, label_src, dataset_path in tqdm.tqdm(test_data):
-        new_image_name = img_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".jpg"
-        new_label_name = label_src.split("/")[-1][:-4] + "_" + str(new_image_uuid) + ".txt"
-        img_dst = os.path.join(data_dest_dir + "data/test/images/", dataset_path + "_" + new_image_name)
-        label_dst = os.path.join(data_dest_dir + "data/test/labels/", dataset_path + "_" + new_label_name)
+        stem = os.path.splitext(os.path.basename(img_src))[0]
+        fname = f"{dataset_path}_{stem}_{new_image_uuid}"
+        img_dst   = os.path.join(data_root, "test", "images", fname + ".jpg")
+        label_dst = os.path.join(data_root, "test", "labels", fname + ".txt")
         copy_data_yaml(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
         new_image_uuid += 1
         test_frames += 1
@@ -397,28 +392,25 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
 
 # ========== TRAINING YOLOv8 ========== #
 def choose_model_size(model_size) -> str:
-    if model_size == 'n':
-        print("Using YOLOv8 Nano model")
-        return 'yolov8n-seg.pt'
-    elif model_size == 's':
-        print("Using YOLOv8 Small model")
-        return 'yolov8s-seg.pt'
-    elif model_size == 'm':
-        print("Using YOLOv8 Medium model")
-        return 'yolov8m-seg.pt'
-    elif model_size == 'l':
-        print("Using YOLOv8 Large model")
-        return 'yolov8l-seg.pt'
-    elif model_size == 'x':
-        print("Using YOLOv8 Extra Large model")
-        return 'yolov8x-seg.pt'
+    sizes = {
+        'n': ('Nano',        'yolov8n-seg.pt'),
+        's': ('Small',       'yolov8s-seg.pt'),
+        'm': ('Medium',      'yolov8m-seg.pt'),
+        'l': ('Large',       'yolov8l-seg.pt'),
+        'x': ('Extra Large', 'yolov8x-seg.pt'),
+    }
+    if model_size not in sizes:
+        raise ValueError(f"Invalid model_size '{model_size}'. Must be one of: {list(sizes)}")
+    name, weights = sizes[model_size]
+    print(f"Using YOLOv8 {name} model")
+    return weights
 
 def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     start_time = time.time()
     model_name = f'yolov8{model_size}-img_size_{IMG_SIZE}_layers_frozen_{LAYER_FREEZE}_{DATE}'
-    
+
     # By default, the model trains on a single GPU.
     # rect=True enables efficient landscape batching by grouping images with similar
     # aspect ratios. NOTE: Ultralytics silently disables mosaic when rect=True because
@@ -450,6 +442,7 @@ def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
         perspective=PERSPECTIVE,
         flipud=FLIPUD,
         fliplr=FLIPLR,
+        bgr=BGR,
         mixup=MIXUP,
         copy_paste=COPY_PASTE,
         erasing=ERASING,
@@ -457,7 +450,7 @@ def train_model(model : YOLO, curr_data_yaml, model_size) -> None:
         workers=4,
         batch=8
     )
-                
+
     end_time = time.time()
     training_time = end_time - start_time
     print("Time to train: ", training_time)
@@ -492,7 +485,6 @@ def test_model(model : YOLO, test_results_path: os.PathLike, test_images_path: o
     print("Inference on test set complete. Results saved to: ", test_results_path)
 
 
-
 # ========== MAIN FUNCTION ========== #
 def main():
     # arg parse
@@ -507,18 +499,25 @@ def main():
 
     args = parser.parse_args()
 
-    DATASETS_DIR = args.dataset_dir
-    DATA_DEST_DIR = args.data_dest_dir
+    FORMAT_ONLY = args.format_only
+    FINETUNE_ONLY = args.finetune_only
 
-    data_dir = DATA_DEST_DIR + 'data/'
-    curr_data_yaml = data_dir + 'data.yaml'
-    TEST_PATH = data_dir + 'test/images/'
+    if FORMAT_ONLY and FINETUNE_ONLY:
+        print("ERROR: --format_only and --finetune_only are mutually exclusive.")
+        return
+
+    DATASETS_DIR = args.dataset_dir
+    # Normalize trailing slash so path concatenation is always correct regardless
+    # of whether the user passes 'path/to/dir' or 'path/to/dir/'.
+    DATA_DEST_DIR = args.data_dest_dir.rstrip('/') + '/'
+
+    data_dir = os.path.join(DATA_DEST_DIR, "data")
+    curr_data_yaml = os.path.join(data_dir, "data.yaml")
+    TEST_PATH = os.path.join(data_dir, "test", "images")
 
     RESUME_TRAINING = args.resume
     RESUME_TRAINING_PATH = args.resume_path
     MODEL_SIZE = args.model_size
-    FORMAT_ONLY = args.format_only
-    FINETUNE_ONLY = args.finetune_only
 
     if not FINETUNE_ONLY:
         # Convert SAM2 masks to YOLO polygon labels, then build the train/val/test split.
@@ -536,33 +535,27 @@ def main():
     if FORMAT_ONLY:
         print("Dataset formatted. Exiting...")
         return
-    
+
     print("CUDA Available: " + str(torch.cuda.is_available()))
     print("Torch CUDA Version: " + str(torch.version.cuda))
     ultralytics.utils.checks.collect_system_info()
 
-    # Load yolov8 segmentation model
+    # Load YOLOv8 segmentation model
     if RESUME_TRAINING:
         if RESUME_TRAINING_PATH is None:
-            print("Please provide a path to the checkpoint to resume training from.")
+            print("ERROR: --resume requires --resume_path to be set.")
             return
         model = YOLO(RESUME_TRAINING_PATH)
     else:
         model = YOLO(choose_model_size(MODEL_SIZE))
 
-    # Training loop
-    epochs_done = 0
-    for _ in range(NUM_TRAIN_LOOPS):
-        print(f"Starting training loop starting on epoch {epochs_done}")
-        train_model(model, curr_data_yaml, MODEL_SIZE)
-        epochs_done += EPOCHS
-        tune_model(model)
-        test_results_path = data_dir + 'test/annotation_results' + f'_{epochs_done}epochs'
-        test_model(model, test_results_path, TEST_PATH)
+    train_model(model, curr_data_yaml, MODEL_SIZE)
+    tune_model(model)
+    test_model(model, os.path.join(data_dir, "test", f"annotation_results_{EPOCHS}epochs"), TEST_PATH)
 
-        # model.train() saves best.pt and last.pt under runs/segment/<run_name>/weights/.
-        # Use best.pt from that directory as the canonical trained checkpoint.
-        model.export(format='onnx', batch=ONNX_BATCH_SIZE, imgsz=IMG_SIZE, dynamic=False)
+    # model.train() saves best.pt and last.pt under runs/segment/<run_name>/weights/.
+    # Use best.pt from that directory as the canonical trained checkpoint.
+    model.export(format='onnx', batch=ONNX_BATCH_SIZE, imgsz=IMG_SIZE, dynamic=False)
 
 if __name__ == "__main__":
     main()

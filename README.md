@@ -11,7 +11,8 @@ format, flattened to one class (`0: car`), and split into train/val/test.
 
 ```
 YOLOv8-Fine-Tune/
-├── environment.yml         # conda env for training + eval
+├── environment.yml         # conda env for training + eval (pinned, recommended)
+├── requirements.txt        # minimal pip alternative for machines with CUDA 12.1 + PyTorch pre-installed
 ├── testing_data.yaml       # single-class data.yaml used for held-out eval
 ├── src/
 │   ├── sam2_finetune_med.py  # end-to-end: SAM2 masks -> YOLO labels -> finetune -> ONNX export
@@ -24,13 +25,20 @@ all `*.pt` / `*.onnx` weights are gitignored.
 
 ## Install
 
-1. Install the CUDA 12.1 toolkit (do **not** reinstall low-level GPU drivers —
-   that can require a display-driver recovery).
-2. From the repo root:
-   ```bash
-   conda env create -f environment.yml
-   conda activate yolo-env
-   ```
+**Option A — conda (recommended, exact pinned environment):**
+```bash
+conda env create -f environment.yml
+conda activate yolo-env
+```
+> `environment.yml` pins the exact environment used for ART training. It
+> includes both CUDA 11.8 and 12.1 packages due to how pip wheels were
+> installed alongside the conda runtime. If `conda env create` fails with
+> libcublas conflicts on a fresh machine, use Option B instead.
+
+**Option B — pip on a machine with CUDA 12.1 and PyTorch already installed:**
+```bash
+pip install -r requirements.txt
+```
 
 ## Expected data layout
 
@@ -167,7 +175,7 @@ If your held-out bags only have SAM2 masks, run the label-generation step
 first:
 
 ```bash
-python sam2_finetune_med.py <holdout_bags_dir> ../testing_data.yaml /tmp/unused/ --format_only
+python sam2_finetune_med.py <holdout_bags_dir> /tmp/unused/ --format_only
 ```
 
 (or call `format_sam2_labels(<holdout_bags_dir>)` directly from a Python

@@ -2,6 +2,8 @@
 # Single-class car detection across prime and fisheye camera views.
 # Paths are relative to the YOLOv8-Fine-Tune/src/ directory (where scripts/notebooks run from).
 
+# train and test are intentionally empty: this file is used only for held-out
+# evaluation via eval.ipynb (model.val()), not for training or test-split inference.
 train:
 val: ../../eval_data/eval/images
 test:
