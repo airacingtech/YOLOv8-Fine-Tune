@@ -67,13 +67,6 @@ DATASET_WEIGHTS = {
     'large': 0.1  # Drop 90% of frames from bags whose name contains 'large'
 }
 
-# Whether or not to use hyperparameter tuning
-HYPERPARAMETER_TUNING = False
-# Whether or not to use ray tune for hyperparameter sweep / tuning
-USE_RAY_TUNE = False
-# Number of iterations for hyperparameter sweep / tuning
-TUNE_ITERS = 5
-
 # ========== TRAINING PARAMS ========== #
 
 # Percentage of dataset to use for training
@@ -122,20 +115,34 @@ def mask_to_polygon(mask):
         ret_contours.append(contour)
     return ret_contours
 
-# to ensure the labels have the same format as the images, we map the jsons to the images
+# Map mask json filenames to image filenames so that the polygon labels written
+# from each mask end up beside the matching image. Two filename conventions are
+# supported:
+#   - frame_000007.png  → 7.json   (zero-padded frame_<N> stem)
+#   - 00005.jpg         → 5.json   (numeric stem)
+# Any other filename pattern is skipped with a warning rather than crashing the
+# pipeline, so a bag from a new recording tool fails loudly on that bag's frames
+# without taking down the rest of the run.
 def create_json_to_img_mapping(images_dir):
     mapping = {}
+    skipped = []
     for img_name in os.listdir(images_dir):
-        if img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
-            name_wo_ext = os.path.splitext(img_name)[0]
+        if not img_name.lower().endswith(('.jpg', '.jpeg', '.png')):
+            continue
+        name_wo_ext = os.path.splitext(img_name)[0]
+        try:
             if name_wo_ext.startswith('frame_'):
-                # frame_000007.PNG → 7.json
                 frame_num = str(int(name_wo_ext.split('_')[1]))
-                mapping[frame_num + '.json'] = img_name
             else:
-                # 00005.jpg → 00005.json
                 frame_num = str(int(name_wo_ext.split('.')[0]))
-                mapping[frame_num + '.json'] = img_name
+        except (IndexError, ValueError):
+            skipped.append(img_name)
+            continue
+        mapping[frame_num + '.json'] = img_name
+    if skipped:
+        print(f"Warning: {len(skipped)} image(s) in {images_dir} did not match the "
+              f"expected naming conventions (frame_<N> or <N>) and were skipped: "
+              f"{skipped[:5]}{' ...' if len(skipped) > 5 else ''}")
     return mapping
 
 # Creates directory of labels from the masks, retaining naming format of the images
@@ -202,39 +209,56 @@ def generate_empty_label(label_dst: os.PathLike) -> None:
 
 def choose_dataset_weight(img_src: os.PathLike, dataset_weight: dict, weighted_frames: dict, frames_removed: dict) -> int:
     """
-    Returns a dataset weight to use dataset_weights dictionary. Uses the file path to determine the dataset.
+    Returns the number of times a frame should be copied based on DATASET_WEIGHTS.
+    Uses the bag directory name (parent of the images/ folder) to look up the weight.
+
+    Up-weighting (weight > 1) must be an integer because frames are physical
+    copies — there is no such thing as 0.5 of a copy. A non-integer weight > 1
+    is rejected up front so the duplicate counter and the actual copy count
+    cannot drift apart.
+
+    Down-weighting (0 <= weight <= 1) is probabilistic: the frame is kept with
+    probability `weight` and otherwise dropped.
     """
     dataset_name = os.path.basename(os.path.dirname(os.path.dirname(img_src)))
     for dataset, weight in dataset_weight.items():
         if dataset in dataset_name:
-            # If weight is greater than 1, keep the frame and create additional frames with the same image and label
             if weight > 1:
-                weighted_frames[dataset] = weighted_frames.get(dataset, 0) + (weight - 1)
-                return int(weight)
-            # If weight is less than 1, randomly choose to keep the frame or not
-            else:
-                # Keep the frame with probability weight
-                if random.random() < weight:
-                    return 1
-                # Discard the frame with probability 1 - weight
-                else:
-                    frames_removed[dataset] = frames_removed.get(dataset, 0) + 1
-                    return 0
+                if not float(weight).is_integer():
+                    raise ValueError(
+                        f"DATASET_WEIGHTS['{dataset}'] = {weight}: up-weighting "
+                        f"must be an integer (whole-number copies). Use a "
+                        f"probability in [0, 1] for down-weighting instead."
+                    )
+                n_copies = int(weight)
+                weighted_frames[dataset] = weighted_frames.get(dataset, 0) + (n_copies - 1)
+                return n_copies
+            if random.random() < weight:
+                return 1
+            frames_removed[dataset] = frames_removed.get(dataset, 0) + 1
+            return 0
     return 1
 
-def copy_frame_pair(label_src: os.PathLike, img_src: os.PathLike, label_dst: os.PathLike, img_dst: os.PathLike, empty_frames_kept: list, weighted_frames: dict, frames_removed: dict) -> None:
+def copy_frame_pair(label_src: os.PathLike, img_src: os.PathLike, label_dst: os.PathLike, img_dst: os.PathLike, empty_frames_kept: list, weighted_frames: dict, frames_removed: dict, force_keep_empty: bool = False) -> None:
     """
     Copies image/label pairs to the destination directory.
     Generates an empty label if no label file exists (frame has no cars).
+    Set force_keep_empty=True for val/test splits to keep all negatives so
+    precision is not artificially inflated by dropping true-negative frames.
     """
+    # Separate stems so images go to images/ and labels go to labels/.
+    # Using img_dst stem for both would write label files into the images/
+    # directory, where Ultralytics will never find them.
+    img_stem   = os.path.splitext(img_dst)[0]
+    label_stem = os.path.splitext(label_dst)[0]
+
     if not os.path.exists(label_src):
         if KEEP_EMPTY_FRAMES:
-            if random.random() < PERCENTAGE_EMPTY_FRAMES_TO_KEEP:
+            if force_keep_empty or random.random() < PERCENTAGE_EMPTY_FRAMES_TO_KEEP:
                 empty_frames_kept[0] += 1
                 for i in range(choose_dataset_weight(img_src, DATASET_WEIGHTS, weighted_frames, frames_removed)):
-                    stem = os.path.splitext(img_dst)[0]
-                    shutil.copy(img_src, stem + f"_{i}.jpg")
-                    generate_empty_label(stem + f"_{i}.txt")
+                    shutil.copy(img_src, img_stem + f"_{i}.jpg")
+                    generate_empty_label(label_stem + f"_{i}.txt")
     else:
         # Normalize every label row to class id 0 (single-class car) in memory.
         # We never rewrite the source file — that would silently mutate the
@@ -250,9 +274,8 @@ def copy_frame_pair(label_src: os.PathLike, img_src: os.PathLike, label_dst: os.
             normalized.append(' '.join(parts) + '\n')
 
         for i in range(choose_dataset_weight(img_src, DATASET_WEIGHTS, weighted_frames, frames_removed)):
-            stem = os.path.splitext(img_dst)[0]
-            shutil.copy(img_src, stem + f"_{i}.jpg")
-            with open(stem + f"_{i}.txt", 'w') as f_out:
+            shutil.copy(img_src, img_stem + f"_{i}.jpg")
+            with open(label_stem + f"_{i}.txt", 'w') as f_out:
                 f_out.writelines(normalized)
 
 def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> None:
@@ -301,14 +324,22 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
     random.shuffle(bag_names)
 
     n = len(bag_names)
+    if n < 3:
+        raise ValueError(
+            f"Need at least 3 bags to build train/val/test splits, found {n}: {bag_names}. "
+            f"Add more bags under {datasets_path}, or run a different splitting strategy."
+        )
+
     train_bags = bag_names[:n * 7 // 10]
     val_bags   = bag_names[n * 7 // 10 : n * 9 // 10]
     test_bags  = bag_names[n * 9 // 10 :]
 
-    # Guarantee at least 1 bag in val and test even with very small datasets.
-    if not val_bags and len(train_bags) > 2:
+    # Guarantee at least 1 bag per split. The 70/20/10 floor split can leave
+    # val empty for small n (e.g. n=3 yields train=[b0,b1], val=[], test=[b2]);
+    # donate one bag from train. The n>=3 guard above ensures train has enough.
+    if not val_bags:
         val_bags = [train_bags.pop()]
-    if not test_bags and len(train_bags) > 1:
+    if not test_bags:
         test_bags = [train_bags.pop()]
 
     print(f"Train bags ({len(train_bags)}): {train_bags}")
@@ -373,7 +404,7 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
         fname = f"{dataset_path}_{stem}_{new_image_uuid}"
         img_dst   = os.path.join(data_root, "valid", "images", fname + ".jpg")
         label_dst = os.path.join(data_root, "valid", "labels", fname + ".txt")
-        copy_frame_pair(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
+        copy_frame_pair(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames, force_keep_empty=True)
         new_image_uuid += 1
         valid_frames += 1
     for img_src, label_src, dataset_path in tqdm.tqdm(test_data):
@@ -381,7 +412,7 @@ def format_datasets(datasets_path: os.PathLike, data_dest_dir: os.PathLike) -> N
         fname = f"{dataset_path}_{stem}_{new_image_uuid}"
         img_dst   = os.path.join(data_root, "test", "images", fname + ".jpg")
         label_dst = os.path.join(data_root, "test", "labels", fname + ".txt")
-        copy_frame_pair(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames)
+        copy_frame_pair(label_src, img_src, label_dst, img_dst, empty_frames_kept, weighted_frames, removed_frames, force_keep_empty=True)
         new_image_uuid += 1
         test_frames += 1
 
@@ -411,7 +442,11 @@ def choose_model_size(model_size) -> str:
     return weights
 
 
-def train_model(model: YOLO, curr_data_yaml: str, model_size: str) -> None:
+def train_model(model: YOLO, curr_data_yaml: str, model_size: str) -> str:
+    """
+    Trains the model and returns the Ultralytics run name. The caller can use
+    this to locate the saved checkpoints under runs/segment/<run_name>/weights/.
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     start_time = time.time()
@@ -460,14 +495,7 @@ def train_model(model: YOLO, curr_data_yaml: str, model_size: str) -> None:
     end_time = time.time()
     training_time = end_time - start_time
     print("Time to train: ", training_time)
-
-
-def tune_model(model: YOLO) -> None:
-    # Runs a hyperparameter sweep and selects the best hyperparameters
-    if HYPERPARAMETER_TUNING:
-        model.tune(use_ray=USE_RAY_TUNE, iterations=TUNE_ITERS)
-    else:
-        print("Skipping hyperparameter tuning")
+    return model_name
 
 
 def test_model(model: YOLO, test_results_path: os.PathLike, test_images_path: os.PathLike) -> None:
@@ -485,7 +513,7 @@ def test_model(model: YOLO, test_results_path: os.PathLike, test_images_path: os
         if not file.lower().endswith(image_exts):
             continue
         file_path = os.path.join(test_images_path, file)
-        output = model.predict(file_path)
+        output = model.predict(file_path, imgsz=IMG_SIZE)
         save_path = os.path.join(test_results_path, file)
         cv2.imwrite(save_path, output[0].plot())
 
@@ -553,13 +581,34 @@ def main():
     else:
         model = YOLO(choose_model_size(MODEL_SIZE))
 
-    train_model(model, curr_data_yaml, MODEL_SIZE)
-    tune_model(model)
-    test_model(model, os.path.join(data_dir, "test", f"annotation_results_{EPOCHS}epochs"), TEST_PATH)
+    model_name = train_model(model, curr_data_yaml, MODEL_SIZE)
 
-    # model.train() saves best.pt and last.pt under runs/segment/<run_name>/weights/.
-    # Use best.pt from that directory as the canonical trained checkpoint.
-    model.export(format='onnx', batch=ONNX_BATCH_SIZE, imgsz=IMG_SIZE, dynamic=False)
+    # Explicitly reload best.pt before test inference and ONNX export. Ultralytics
+    # 8.3.x already swaps the in-memory model to best.pt at the end of model.train(),
+    # so this is functionally redundant — but loading from disk by name makes the
+    # canonical-checkpoint contract obvious to readers and is robust to any future
+    # change in Ultralytics' post-train reload behavior.
+    best_pt = os.path.join(CURR_DIR, 'runs', 'segment', model_name, 'weights', 'best.pt')
+    assert os.path.exists(best_pt), f"best.pt not found at {best_pt}"
+    best_model = YOLO(best_pt)
+
+    test_model(best_model, os.path.join(data_dir, "test", f"annotation_results_{EPOCHS}epochs"), TEST_PATH)
+
+    # ONNX export options:
+    #   half=True      — FP16 weights. ~50% smaller file, faster GPU inference,
+    #                    negligible mAP loss for segmentation in practice.
+    #                    Requires CUDA at export time (already required for training).
+    #   simplify=True  — run onnxslim to fuse/prune the graph. Default in recent
+    #                    Ultralytics, but pinned explicitly here.
+    #   dynamic=False  — static input shape; required downstream for TensorRT.
+    best_model.export(
+        format='onnx',
+        batch=ONNX_BATCH_SIZE,
+        imgsz=IMG_SIZE,
+        dynamic=False,
+        half=True,
+        simplify=True,
+    )
 
 if __name__ == "__main__":
     main()
